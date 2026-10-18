@@ -105,7 +105,7 @@ OPTIONS
   --save                        save the project back to --project when done
   --save-as <p.fcproj>          save the project to this path when done
   --bridge <127.0.0.1:PORT>     send commands to the running app (`filmcraft --control PORT`)
-  --data-dir <dir>              FilmCraft data directory for user export presets (headless;
+  --data-dir <dir>              FilmCraft data directory for user presets and templates (headless;
                                 default: the app's data directory)
   --keep-going                  `run`: report failing lines and continue
   --compact                     one-line JSON output
@@ -158,6 +158,13 @@ impl Backend {
         // user export presets (and other per-user libraries) from the data directory
         if let Some(dir) = a.opt("--data-dir").map(std::path::PathBuf::from).or_else(filmcraft_engine::autosave::default_data_dir) {
             s.export_presets.set_dir(&dir);
+            // the per-user libraries that hang off the preferences file (graphics templates, project
+            // templates, label presets) need it too; load it first so a preference change saved by a
+            // command keeps the user's settings instead of writing the defaults over them
+            let prefs = dir.join("preferences.json");
+            s.prefs = filmcraft_engine::autosave::Preferences::load(&prefs);
+            s.presets.set_dir(&dir);
+            s.prefs_path = Some(prefs);
         }
         if let Some(p) = a.opt("--project") {
             if let Err(e) = s.execute("file.open", json!({"path": p})) {
@@ -353,12 +360,21 @@ async fn cli() {
             };
             let mut b = Backend::open(&a);
             let mut failed = 0;
+            let mut done: Vec<Option<Value>> = Vec::new(); // results so far, for `$N` step references
             for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#')) {
                 let v: Value = serde_json::from_str(line).unwrap_or_else(|e| usage(format!("line {}: {e}", n + 1)));
                 let id = v["id"].as_str().unwrap_or_else(|| usage(format!("line {}: missing \"id\"", n + 1)));
-                match b.exec(id, v.get("params").cloned().unwrap_or(json!({}))).await {
-                    Ok(r) => outln!("{}", json!({"line": n + 1, "id": id, "ok": true, "result": r})),
+                let run = match filmcraft_automation::refs::resolve(v.get("params").cloned().unwrap_or(json!({})), &done) {
+                    Ok(params) => b.exec(id, params).await,
+                    Err(e) => Err(e),
+                };
+                match run {
+                    Ok(r) => {
+                        outln!("{}", json!({"line": n + 1, "id": id, "ok": true, "result": r}));
+                        done.push(Some(r));
+                    }
                     Err(e) => {
+                        done.push(None);
                         outln!("{}", json!({"line": n + 1, "id": id, "ok": false, "error": e}));
                         failed += 1;
                         if !a.flag("--keep-going") {

@@ -339,21 +339,28 @@ impl FilmcraftMcp {
 
     #[tool(
         title = "Run several commands",
-        description = "Run several commands in order: {steps: [{id, params?}], stop_on_error?: true}. Returns {completed, failed, results: [{ok, result | error}]}; each edit is its own undo step.",
+        description = "Run several commands in order: {steps: [{id, params?}], stop_on_error?: true}. Returns {completed, failed, results: [{ok, result | error}]}; each edit is its own undo step. A string parameter `$N.path` / `$prev.path` takes a value from an earlier step's result (0-based), e.g. {\"clip\": \"$0.clip\"}.",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false)
     )]
     async fn command_batch(&self, Parameters(p): Parameters<BatchParams>) -> Result<CallToolResult, McpError> {
         let stop = p.stop_on_error.unwrap_or(true);
         let (mut completed, mut failed, mut results) = (0u32, 0u32, Vec::new());
+        let mut done: Vec<Option<Value>> = Vec::new(); // results so far, for `$N` step references
         for st in p.steps {
-            match self.run(&st.id, st.params.unwrap_or(json!({}))).await {
+            let run = match crate::refs::resolve(st.params.unwrap_or(json!({})), &done) {
+                Ok(params) => self.run(&st.id, params).await.map_err(|e| e.to_string()),
+                Err(e) => Err(e),
+            };
+            match run {
                 Ok(v) => {
                     completed += 1;
+                    done.push(Some(v.clone()));
                     results.push(json!({"ok": true, "result": v}));
                 }
                 Err(e) => {
                     failed += 1;
-                    results.push(json!({"ok": false, "error": e.to_string()}));
+                    done.push(None);
+                    results.push(json!({"ok": false, "error": e}));
                     if stop {
                         break;
                     }

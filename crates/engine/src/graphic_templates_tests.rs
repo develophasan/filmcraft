@@ -380,3 +380,25 @@ fn copy_paste_duplicates_a_graphic_clip() {
     assert!((pasted[0].start.seconds() - 620.0).abs() < 0.05, "at the playhead: {:?}", pasted[0].start);
     assert_eq!(texts(&s, pasted[0].id), vec!["Lyric".to_string()]);
 }
+
+#[test]
+fn graphics_set_keyframe_animates_a_layer_property() {
+    let mut s = demo("gt-set-keyframe");
+    let c = clip_of(&s.execute("graphics.newShape", json!({"shape": "rectangle", "position": [960, 540], "size": [400, 200]})).unwrap());
+    let start = item(&s, c).start;
+    let layer_keys = |s: &Session| {
+        let it = item(s, c);
+        let e = it.effects.iter().find(|e| e.effect.starts_with("graphic_")).unwrap();
+        e.params.get("opacity").unwrap().keyframes.len()
+    };
+    // without `keyframe` a property that is not animated takes a static value, whatever the time
+    s.execute("graphics.set", json!({"clip": c.0, "layer": 0, "props": {"opacity": 50}, "time": start.0})).unwrap();
+    assert_eq!(layer_keys(&s), 0);
+    // with it, each call writes a keyframe and the property animates
+    s.execute("graphics.set", json!({"clip": c.0, "layer": 0, "props": {"opacity": 0}, "time": start.0, "keyframe": true})).unwrap();
+    s.execute("graphics.set", json!({"clip": c.0, "layer": 0, "props": {"opacity": 100}, "time": start.0 + filmcraft_time::TICKS_PER_SECOND, "keyframe": true}))
+        .unwrap();
+    assert_eq!(layer_keys(&s), 2);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(layer_keys(&s), 1);
+}

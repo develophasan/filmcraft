@@ -240,8 +240,10 @@ fn param_entry<'a>(e: &'a mut EffectInstance, id: &str) -> Option<&'a mut Param>
 }
 
 /// Set properties `props` on layer `e` (keyframe-aware at media time `mt`). Changing the text
-/// keeps per-character styles on their characters.
-fn apply_props(e: &mut EffectInstance, props: &serde_json::Map<String, Value>, mt: Tick) -> Result<()> {
+/// keeps per-character styles on their characters. With `keyframe`, each property gets a keyframe
+/// at `mt` and becomes animated (the stopwatch and the value in one step, as `effects.setParam`);
+/// without it a property that is not animated takes a new static value whatever the time.
+fn apply_props(e: &mut EffectInstance, props: &serde_json::Map<String, Value>, mt: Tick, keyframe: bool) -> Result<()> {
     for (k, v) in props {
         if k == "enabled" {
             e.enabled = v.as_bool().unwrap_or(true);
@@ -251,7 +253,11 @@ fn apply_props(e: &mut EffectInstance, props: &serde_json::Map<String, Value>, m
         let prm = param_entry(e, id).ok_or_else(|| bad("graphics.set", format!("no property `{k}`")))?;
         let pv = to_param(&prm.value, id, v).ok_or_else(|| bad("graphics.set", format!("`{k}`: value has the wrong type")))?;
         let old = prm.value_at(mt);
-        prm.set_at(mt, pv.clone());
+        if keyframe && k != "text" {
+            prm.put_keyframe(mt, pv.clone());
+        } else {
+            prm.set_at(mt, pv.clone());
+        }
         if let (ParamValue::Text(a), ParamValue::Text(b), "text") = (&old, &pv, id)
             && let Some(x) = e.layer.as_mut()
         {
@@ -272,13 +278,14 @@ pub(crate) fn set_props(
     tl: Tick,
     label: &str,
     merge: Option<&str>,
+    keyframe: bool,
 ) -> Result<()> {
     let props = props.clone();
     s.edit_sequence_as(label, merge, |q, _, _| {
         let (_, it) = q.find_item_mut(clip).ok_or(filmcraft_edit::EditError::NoItem(clip))?;
-        let mt = it.source_time_at(tl.clamp(it.start, it.end() - Tick(1)));
+        let mt = it.source_time_at(tl.clamp(it.start, (it.end() - Tick(1)).max(it.start)));
         let e = it.effects.get_mut(eidx).ok_or_else(|| bad("graphics.set", "no such layer"))?;
-        apply_props(e, &props, mt)?;
+        apply_props(e, &props, mt, keyframe)?;
         Ok(())
     })
 }
@@ -351,7 +358,7 @@ fn set_text_type(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit_sequence("Text Layer Type", |q, _, _| {
         let (_, it) = q.find_item_mut(clip).ok_or(filmcraft_edit::EditError::NoItem(clip))?;
         let e = it.effects.get_mut(ei).ok_or_else(|| bad(ID, "no such layer"))?;
-        apply_props(e, &props, mt)?;
+        apply_props(e, &props, mt, false)?;
         if let Some(a) = param_entry(e, "anchor") {
             a.map_values(|v| match v.as_vec2() {
                 Some(a) => ParamValue::Vec2(Vec2::new(a.x + shift.0 as f64, a.y + shift.1 as f64)),
@@ -824,7 +831,7 @@ fn menu_commands() -> Vec<CommandSpec> {
                     props.insert("sides".into(), json!(n));
                     let ph = s.playhead();
                     let before = s.history.undo.len();
-                    set_props(s, clip, ei, &props, ph, "Change Graphic Property", None)?;
+                    set_props(s, clip, ei, &props, ph, "Change Graphic Property", None, false)?;
                     if s.history.undo.len() > before {
                         s.history.undo.pop();
                     }
@@ -1043,7 +1050,7 @@ pub fn commands() -> Vec<CommandSpec> {
                 let mut props = serde_json::Map::new();
                 props.insert("text".into(), Value::String(text));
                 let ph = s.playhead();
-                set_props(s, clip, ei, &props, ph, "Edit Text", None)?;
+                set_props(s, clip, ei, &props, ph, "Edit Text", None, false)?;
                 if merge && s.history.undo.len() >= 2 {
                     // keep the snapshot from before the typing session
                     s.history.undo.pop();
@@ -1056,7 +1063,7 @@ pub fn commands() -> Vec<CommandSpec> {
             "Set Graphic Properties",
             &[],
             None,
-            r##"{"clip":id?,"layer":n|name?,"props":{"font":"Inter","font_style":"Bold","size":120,"align":"center","tracking":50,"leading":0,"fill_color":"#ffcc00","stroke":true,"stroke_width":6,"background":true,"shadow":true,"position":[x,y],"scale":100,"rotation":0,"opacity":100,…},"time":ticks?,"merge":bool?,"begin":bool?}"##,
+            r##"{"clip":id?,"layer":n|name?,"props":{"font":"Inter","font_style":"Bold","size":120,"align":"center","tracking":50,"leading":0,"fill_color":"#ffcc00","stroke":true,"stroke_width":6,"background":true,"shadow":true,"position":[x,y],"scale":100,"rotation":0,"opacity":100,…},"time":ticks?,"keyframe":bool? (true: write a keyframe at `time` and animate each property; otherwise a property that is not animated gets a new static value whatever the time),"merge":bool?,"begin":bool?}"##,
             has_graphic,
             |s, p| {
                 let clip = target_clip(s, p).ok_or_else(|| bad("graphics.set", "no graphic clip"))?;
@@ -1068,7 +1075,8 @@ pub fn commands() -> Vec<CommandSpec> {
                 if bool_p(p, "begin").unwrap_or(false) {
                     s.history.merge_key = None;
                 }
-                set_props(s, clip, ei, &props, tl, "Change Graphic Property", merge.as_deref())?;
+                let keyframe = bool_p(p, "keyframe").unwrap_or(false);
+                set_props(s, clip, ei, &props, tl, "Change Graphic Property", merge.as_deref(), keyframe)?;
                 Ok(Value::Null)
             },
         ),
