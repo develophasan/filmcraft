@@ -70,12 +70,114 @@ impl Drop for Slot {
 
 fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context) {
     let Ok(read) = stream.try_clone() else { return };
+    let Ok(events_out) = stream.try_clone() else { return };
+    let mut watch: Option<Value> = None;
     serve_lines(read, stream, |method, params| {
-        let (req, rrx) = ControlRequest::new(method, params);
-        tx.send(req).ok()?;
-        ctx.request_repaint();
-        Some(rrx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"})))
+        if method == WATCH_METHOD {
+            // the reply acknowledges; the connection then only streams events (see `watch_events`)
+            let reply = json!({"ok": true, "result": {"watching": true, "events": EVENT_KINDS}, CLOSE_AFTER: true});
+            watch = Some(params);
+            return Some(reply);
+        }
+        ask(tx, ctx, &method, params, Duration::from_secs(60))
     });
+    if let Some(params) = watch {
+        watch_events(events_out, tx, ctx, &params);
+    }
+}
+
+/// Send one request to the UI thread and wait for its reply (`None` when the app is gone).
+fn ask(tx: &Sender<ControlRequest>, ctx: &egui::Context, method: &str, params: Value, timeout: Duration) -> Option<Value> {
+    let (req, rrx) = ControlRequest::new(method.to_string(), params);
+    tx.send(req).ok()?;
+    ctx.request_repaint();
+    Some(rrx.recv_timeout(timeout).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"})))
+}
+
+/// `events.watch {intervalMs?, settleMs?}`: after its reply the connection streams one JSON line per
+/// change of the editor state an agent cares about, until the client closes it:
+/// `{"event":"selection","selection":[clip ids]}`, `{"event":"playback","playing":bool,"playhead":ticks}`,
+/// `{"event":"playhead","playhead":ticks}` (a parked playhead: sent once it has not moved for `settleMs`,
+/// not while playing or scrubbing), `{"event":"edit","undo":n,"redo":n,"last":label}` (an edit, undo or
+/// redo), `{"event":"sequence","activeSequence":id}`. Each line also has `"state"`: the current
+/// `{playhead, selection, playing, activeSequence, undo, redo}`. The state is sampled every
+/// `intervalMs` (default 250, 50-5000) on the UI thread, like a client polling `ui.inspect`.
+pub const WATCH_METHOD: &str = "events.watch";
+const EVENT_KINDS: [&str; 5] = ["selection", "playback", "playhead", "edit", "sequence"];
+/// Reply key that tells `serve_lines` to stop reading requests after this reply.
+const CLOSE_AFTER: &str = "__closeAfter";
+
+fn watch_events(mut out: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, params: &Value) {
+    let interval = Duration::from_millis(params.get("intervalMs").and_then(Value::as_u64).unwrap_or(250).clamp(50, 5000));
+    let settle = Duration::from_millis(params.get("settleMs").and_then(Value::as_u64).unwrap_or(400).clamp(0, 10_000));
+    let mut prev: Option<Value> = None;
+    // a playhead that moved and has not yet been reported as parked: (value, when it last changed)
+    let mut moving: Option<(Value, std::time::Instant)> = None;
+    loop {
+        let Some(state) = sample(tx, ctx) else { return };
+        let mut events = match &prev {
+            Some(p) => diff_events(p, &state),
+            None => Vec::new(),
+        };
+        let playing = state["playing"].as_bool().unwrap_or(false);
+        if prev.as_ref().is_some_and(|p| p["playhead"] != state["playhead"]) {
+            moving = Some((state["playhead"].clone(), std::time::Instant::now()));
+        }
+        if let Some((ph, since)) = &moving
+            && !playing
+            && *ph == state["playhead"]
+            && since.elapsed() >= settle
+        {
+            events.push(json!({"event": "playhead", "playhead": ph}));
+            moving = None;
+        }
+        for mut e in events {
+            if let Some(o) = e.as_object_mut() {
+                o.insert("state".into(), state.clone());
+            }
+            if writeln!(out, "{e}").and_then(|()| out.flush()).is_err() {
+                return; // the client went away
+            }
+        }
+        prev = Some(state);
+        std::thread::sleep(interval);
+    }
+}
+
+/// The watched part of the editor state, read on the UI thread.
+fn sample(tx: &Sender<ControlRequest>, ctx: &egui::Context) -> Option<Value> {
+    let ui = ask(tx, ctx, "ui.inspect", json!({}), Duration::from_secs(10))?;
+    let hist = ask(tx, ctx, "engine.execute", json!({"command": "history.list", "params": {}}), Duration::from_secs(10))?;
+    let ui = ui.get("result").cloned().unwrap_or(Value::Null);
+    let hist = hist.get("result").cloned().unwrap_or(Value::Null);
+    let undo = hist.get("undo").and_then(Value::as_array);
+    Some(json!({
+        "playhead": ui.get("playhead").cloned().unwrap_or(Value::Null),
+        "selection": ui.get("selection").cloned().unwrap_or(json!([])),
+        "playing": ui.get("playback").and_then(|p| p.get("playing")).cloned().unwrap_or(json!(false)),
+        "activeSequence": ui.get("activeSequence").cloned().unwrap_or(Value::Null),
+        "undo": undo.map_or(0, Vec::len),
+        "redo": hist.get("redo").and_then(Value::as_array).map_or(0, Vec::len),
+        "last": undo.and_then(|u| u.last()).cloned().unwrap_or(Value::Null),
+    }))
+}
+
+/// Events between two samples (the parked-playhead event is timed by the caller).
+fn diff_events(prev: &Value, cur: &Value) -> Vec<Value> {
+    let mut out = Vec::new();
+    if prev["activeSequence"] != cur["activeSequence"] {
+        out.push(json!({"event": "sequence", "activeSequence": cur["activeSequence"]}));
+    }
+    if prev["selection"] != cur["selection"] {
+        out.push(json!({"event": "selection", "selection": cur["selection"]}));
+    }
+    if prev["playing"] != cur["playing"] {
+        out.push(json!({"event": "playback", "playing": cur["playing"], "playhead": cur["playhead"]}));
+    }
+    if prev["undo"] != cur["undo"] || prev["redo"] != cur["redo"] || prev["last"] != cur["last"] {
+        out.push(json!({"event": "edit", "undo": cur["undo"], "redo": cur["redo"], "last": cur["last"]}));
+    }
+    out
 }
 
 /// One parsed line.
@@ -150,10 +252,12 @@ fn serve_lines<R: Read, W: Write>(read: R, mut out: W, mut handle: impl FnMut(St
                 Line::Reject(e) => e,
                 Line::Request { id, method, params } => {
                     let Some(mut r) = handle(method, params) else { return };
+                    let mut close = false;
                     if let Some(o) = r.as_object_mut() {
+                        close = o.remove(CLOSE_AFTER).is_some();
                         o.insert("id".into(), id);
                     }
-                    if writeln!(out, "{r}").and_then(|()| out.flush()).is_err() {
+                    if writeln!(out, "{r}").and_then(|()| out.flush()).is_err() || close {
                         return;
                     }
                     continue;
@@ -168,6 +272,38 @@ fn serve_lines<R: Read, W: Write>(read: R, mut out: W, mut handle: impl FnMut(St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn st(playhead: i64, sel: &[u64], playing: bool, undo: usize) -> Value {
+        json!({"playhead": playhead, "selection": sel, "playing": playing, "activeSequence": 1, "undo": undo, "redo": 0,
+               "last": if undo > 0 { json!("Edit") } else { Value::Null }})
+    }
+
+    #[test]
+    fn watch_reports_selection_playback_and_edits_only_when_they_change() {
+        let a = st(0, &[], false, 0);
+        assert!(diff_events(&a, &a).is_empty());
+        let kinds = |v: Vec<Value>| v.iter().map(|e| e["event"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+        assert_eq!(kinds(diff_events(&a, &st(0, &[7], false, 0))), ["selection"]);
+        assert_eq!(kinds(diff_events(&a, &st(10, &[], true, 0))), ["playback"]);
+        assert_eq!(kinds(diff_events(&a, &st(0, &[], false, 1))), ["edit"]);
+        // a moving playhead alone is not an event here: the watcher reports it once parked
+        assert!(diff_events(&a, &st(99, &[], false, 0)).is_empty());
+    }
+
+    #[test]
+    fn watch_request_is_acknowledged_and_ends_request_reading() {
+        let input = b"{\"id\":1,\"method\":\"events.watch\"}\n{\"id\":2,\"method\":\"ui.inspect\"}\n";
+        let mut out = Vec::new();
+        let mut seen = Vec::new();
+        serve_lines(&input[..], &mut out, |method, _| {
+            seen.push(method.clone());
+            Some(if method == WATCH_METHOD { json!({"ok": true, CLOSE_AFTER: true}) } else { json!({"ok": true}) })
+        });
+        assert_eq!(seen, [WATCH_METHOD]);
+        let text = String::from_utf8(out).unwrap_or_default();
+        assert_eq!(text.lines().count(), 1);
+        assert!(!text.contains(CLOSE_AFTER), "{text}");
+    }
 
     fn run(input: &[u8]) -> (Vec<Value>, Vec<String>) {
         let mut out = Vec::new();
