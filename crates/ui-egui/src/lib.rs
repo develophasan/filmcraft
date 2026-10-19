@@ -274,6 +274,8 @@ pub(crate) const EXPORT_SAVE_DIALOGS: [(&str, &str, &str); 7] = [
 pub struct FilmcraftApp {
     pub session: Session,
     pub ui: UiState,
+    /// The Assistant panel's content and the user's events for its agent (`agent.set` / `agent.poll`).
+    pub agent: panels::agent::AgentPanel,
     pub tokens: Tokens,
     pub frames: Arc<FrameServer>,
     pub playback: Playback,
@@ -602,6 +604,7 @@ impl FilmcraftApp {
             applied_prefs: None,
             applied_ui_scale: None,
             workspace_restored: false,
+            agent: Default::default(),
             workspaces,
             menu_workspaces: Default::default(),
         }

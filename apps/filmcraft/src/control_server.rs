@@ -94,27 +94,30 @@ fn ask(tx: &Sender<ControlRequest>, ctx: &egui::Context, method: &str, params: V
     Some(rrx.recv_timeout(timeout).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"})))
 }
 
-/// `events.watch {intervalMs?, settleMs?}`: after its reply the connection streams one JSON line per
+/// `events.watch {intervalMs?, settleMs?, agent?}`: after its reply the connection streams one JSON line per
 /// change of the editor state an agent cares about, until the client closes it:
 /// `{"event":"selection","selection":[clip ids]}`, `{"event":"playback","playing":bool,"playhead":ticks}`,
 /// `{"event":"playhead","playhead":ticks}` (a parked playhead: sent once it has not moved for `settleMs`,
 /// not while playing or scrubbing), `{"event":"edit","undo":n,"redo":n,"last":label}` (an edit, undo or
-/// redo), `{"event":"sequence","activeSequence":id}`. Each line also has `"state"`: the current
+/// redo), `{"event":"sequence","activeSequence":id}`, and the Assistant panel's user events as
+/// `{"event":"agent","kind":…}` (unless `agent: false`; see `panels::agent`). Each line also has `"state"`: the current
 /// `{playhead, selection, playing, activeSequence, undo, redo}`. The state is sampled every
 /// `intervalMs` (default 250, 50-5000) on the UI thread, like a client polling `ui.inspect`.
 pub const WATCH_METHOD: &str = "events.watch";
-const EVENT_KINDS: [&str; 5] = ["selection", "playback", "playhead", "edit", "sequence"];
+const EVENT_KINDS: [&str; 6] = ["selection", "playback", "playhead", "edit", "sequence", "agent"];
 /// Reply key that tells `serve_lines` to stop reading requests after this reply.
 const CLOSE_AFTER: &str = "__closeAfter";
 
 fn watch_events(mut out: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, params: &Value) {
     let interval = Duration::from_millis(params.get("intervalMs").and_then(Value::as_u64).unwrap_or(250).clamp(50, 5000));
     let settle = Duration::from_millis(params.get("settleMs").and_then(Value::as_u64).unwrap_or(400).clamp(0, 10_000));
+    // `agent: false`: this watcher leaves the Assistant panel's events to another client
+    let drain_agent = params.get("agent").and_then(Value::as_bool).unwrap_or(true);
     let mut prev: Option<Value> = None;
     // a playhead that moved and has not yet been reported as parked: (value, when it last changed)
     let mut moving: Option<(Value, std::time::Instant)> = None;
     loop {
-        let Some(state) = sample(tx, ctx) else { return };
+        let Some((state, inbox)) = sample(tx, ctx, drain_agent) else { return };
         let mut events = match &prev {
             Some(p) => diff_events(p, &state),
             None => Vec::new(),
@@ -131,6 +134,13 @@ fn watch_events(mut out: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Con
             events.push(json!({"event": "playhead", "playhead": ph}));
             moving = None;
         }
+        events.extend(inbox.into_iter().map(|ev| {
+            let mut e = json!({"event": "agent"});
+            if let (Some(o), Some(src)) = (e.as_object_mut(), ev.as_object()) {
+                o.extend(src.clone());
+            }
+            e
+        }));
         for mut e in events {
             if let Some(o) = e.as_object_mut() {
                 o.insert("state".into(), state.clone());
@@ -144,14 +154,20 @@ fn watch_events(mut out: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Con
     }
 }
 
-/// The watched part of the editor state, read on the UI thread.
-fn sample(tx: &Sender<ControlRequest>, ctx: &egui::Context) -> Option<Value> {
+/// The watched part of the editor state, read on the UI thread, and the Assistant panel's user
+/// events since the last sample (drained: they are delivered once, as `agent` events).
+fn sample(tx: &Sender<ControlRequest>, ctx: &egui::Context, drain_agent: bool) -> Option<(Value, Vec<Value>)> {
     let ui = ask(tx, ctx, "ui.inspect", json!({}), Duration::from_secs(10))?;
     let hist = ask(tx, ctx, "engine.execute", json!({"command": "history.list", "params": {}}), Duration::from_secs(10))?;
     let ui = ui.get("result").cloned().unwrap_or(Value::Null);
     let hist = hist.get("result").cloned().unwrap_or(Value::Null);
     let undo = hist.get("undo").and_then(Value::as_array);
-    Some(json!({
+    let inbox = if drain_agent {
+        ask(tx, ctx, "agent.poll", json!({}), Duration::from_secs(10)).and_then(|r| r.get("result").and_then(Value::as_array).cloned()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let state = json!({
         "playhead": ui.get("playhead").cloned().unwrap_or(Value::Null),
         "selection": ui.get("selection").cloned().unwrap_or(json!([])),
         "playing": ui.get("playback").and_then(|p| p.get("playing")).cloned().unwrap_or(json!(false)),
@@ -159,7 +175,8 @@ fn sample(tx: &Sender<ControlRequest>, ctx: &egui::Context) -> Option<Value> {
         "undo": undo.map_or(0, Vec::len),
         "redo": hist.get("redo").and_then(Value::as_array).map_or(0, Vec::len),
         "last": undo.and_then(|u| u.last()).cloned().unwrap_or(Value::Null),
-    }))
+    });
+    Some((state, inbox))
 }
 
 /// Events between two samples (the parked-playhead event is timed by the caller).

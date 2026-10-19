@@ -114,6 +114,19 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
         },
         "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_items(app)).unwrap_or_default()),
         "ui.inspect" => ok(inspect(app, ctx)),
+        // Assistant panel (`panels::agent`): an external agent fills it and reads the user's events
+        "agent.set" => {
+            let now = ctx.input(|i| i.time);
+            ctx.request_repaint();
+            match app.agent.set(p, now) {
+                Ok(v) => ok(v),
+                Err(e) => err(e),
+            }
+        }
+        "agent.poll" => {
+            let now = ctx.input(|i| i.time);
+            ok(json!(app.agent.poll(now)))
+        }
         "perf.stats" => ok(crate::perf::stats(app)),
         "ui.elements" => {
             if app.timeline_still < 2 {
