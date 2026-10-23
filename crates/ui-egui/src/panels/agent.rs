@@ -69,6 +69,42 @@ pub struct AgentPanel {
     pub draft: String,
     /// UI time of the agent's last call (None: never connected).
     pub last_seen: Option<f64>,
+    /// Built-in CrStudio Asistan (Claude via the `claude` CLI): the engine state version last
+    /// copied into this panel. Used when no external agent is connected.
+    pub builtin_version: Option<u64>,
+}
+
+/// Copy the built-in assistant's state (engine `crstudio.assistant.*`) into the panel.
+fn sync_builtin(app: &mut FilmcraftApp) {
+    let shared = app.session.crstudio.assistant.clone();
+    let st = filmcraft_engine::crstudio::assistant::lock(&shared);
+    let a = &mut app.agent;
+    if a.builtin_version == Some(st.version) && a.busy == st.busy {
+        return;
+    }
+    a.builtin_version = Some(st.version);
+    a.title = "CrStudio Asistan".into();
+    a.busy = st.busy;
+    a.status = if st.busy { "Claude çalışıyor…".into() } else { "Claude hazır".into() };
+    a.hint = "Ör: 12–20 sn arasına alt kuşak reklam koy · buraya gerilim efekti ekle".into();
+    a.context = "Oynatma kafasındaki kareyi, In/Out aralığını ve zaman çizelgesini görür; önerdiği adımları siz onaylarsınız (hepsi geri alınabilir).".into();
+    a.log = st.log.iter().map(|(role, text)| AgentMessage { role: role.clone(), text: text.clone() }).collect();
+    a.suggestions = st
+        .steps
+        .iter()
+        .filter(|s| s.status == "bekliyor")
+        .map(|s| AgentSuggestion { id: s.id.clone(), text: format!("{}  ·  {}", s.label, s.command), seconds: s.seconds })
+        .collect();
+    let mut actions = Vec::new();
+    if !a.suggestions.is_empty() {
+        actions.push(AgentAction { id: "apply_all".into(), label: "Hepsini uygula".into(), tip: "Bekleyen tüm adımları sırayla uygular".into() });
+    }
+    if st.busy {
+        actions.push(AgentAction { id: "stop".into(), label: "Durdur".into(), tip: String::new() });
+    } else if !a.log.is_empty() {
+        actions.push(AgentAction { id: "clear".into(), label: "Temizle".into(), tip: "Konuşmayı ve önerileri siler".into() });
+    }
+    a.actions = actions;
 }
 
 fn clip(s: &str) -> String {
@@ -180,7 +216,15 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let ui = &mut child;
     let mut clicks: Vec<Click> = Vec::new();
     let mut boxes: Vec<(String, Rect, String)> = Vec::new();
-    let connected = app.agent.connected(now);
+    // an external agent (control channel) wins; otherwise the built-in Claude assistant serves
+    let builtin = !app.agent.connected(now);
+    if builtin {
+        sync_builtin(app);
+        if app.agent.busy {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+        }
+    }
+    let connected = true;
     let a = &mut app.agent;
 
     ui.horizontal(|ui| {
@@ -277,11 +321,38 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         boxes.push(("agent.input".into(), r.rect, a.draft.clone()));
         boxes.push(("agent.send".into(), b.rect, crate::i18n::t("Send").to_string()));
     });
-    if send && connected {
+    if send && builtin {
+        let text = a.draft.trim().to_string();
+        if !text.is_empty() && !a.busy {
+            a.draft.clear();
+            if let Err(e) = app.session.execute("crstudio.assistant.ask", json!({"text": text})) {
+                app.ui.status = e.to_string();
+            }
+            app.agent.builtin_version = None;
+        }
+    } else if send && connected {
         a.submit();
     }
     for c in clicks {
         match c {
+            Click::Action(id) if builtin => {
+                let (cmd, args) = match id.as_str() {
+                    "apply_all" => ("crstudio.assistant.apply", json!({"all": true})),
+                    "stop" => ("crstudio.assistant.cancel", json!({})),
+                    _ => ("crstudio.assistant.clear", json!({})),
+                };
+                if let Err(e) = app.session.execute(cmd, args) {
+                    app.ui.status = e.to_string();
+                }
+                app.agent.builtin_version = None;
+            }
+            Click::Suggestion(id, accept) if builtin => {
+                let (cmd, args) = if accept { ("crstudio.assistant.apply", json!({"id": id})) } else { ("crstudio.assistant.dismiss", json!({"id": id})) };
+                if let Err(e) = app.session.execute(cmd, args) {
+                    app.ui.status = e.to_string();
+                }
+                app.agent.builtin_version = None;
+            }
             Click::Action(id) => app.agent.push_event(json!({"kind": "action", "id": id})),
             Click::Suggestion(id, accept) => {
                 if !accept {
@@ -310,9 +381,12 @@ mod tests {
         let mut a = AgentPanel::default();
         assert!(!a.connected(0.0));
         let st = a
-            .set(&json!({"title": "Efsane", "actions": [{"id": "sub", "label": "Abone ol"}],
+            .set(
+                &json!({"title": "Efsane", "actions": [{"id": "sub", "label": "Abone ol"}],
                           "suggestions": [{"id": "s1", "text": "Uyarı balonu", "seconds": 12.5}, {"id": "s2", "text": "x", "seconds": -3}],
-                          "append": [{"role": "assistant", "text": "hazır"}]}), 10.0)
+                          "append": [{"role": "assistant", "text": "hazır"}]}),
+                10.0,
+            )
             .unwrap();
         assert_eq!(st["connected"], true);
         assert_eq!(a.actions.len(), 1);
@@ -326,8 +400,7 @@ mod tests {
 
     #[test]
     fn input_and_events_reach_the_inbox_in_order_and_poll_drains_it() {
-        let mut a = AgentPanel::default();
-        a.draft = "  buraya balon koy ".into();
+        let mut a = AgentPanel { draft: "  buraya balon koy ".into(), ..Default::default() };
         a.submit();
         a.push_event(json!({"kind": "action", "id": "sub"}));
         a.draft = "   ".into();

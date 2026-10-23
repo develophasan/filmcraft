@@ -189,6 +189,24 @@ impl VoiceOver {
     fn input(&mut self) -> &mut Box<dyn AudioInput> {
         self.input.get_or_insert_with(|| Box::new(SyntheticInput::clicks()))
     }
+    /// Start capturing audio directly for a standalone scene voice-over take (without requiring an open sequence).
+    pub fn start_direct(&mut self, device: &str, sample_rate: u32) -> std::result::Result<InputFormat, String> {
+        let fmt = self.input().start(device, sample_rate)?;
+        self.captured.clear();
+        Ok(fmt)
+    }
+    /// Stop direct capture and return the first channel's samples (at the rate `start_direct`
+    /// reported). An empty take is returned as empty: the caller decides what that means.
+    pub fn stop_direct(&mut self, rate: u32) -> std::result::Result<Vec<f32>, String> {
+        let input = self.input();
+        input.stop();
+        let max = (rate.max(8000) as usize).saturating_mul(1800);
+        let chans = input.read(max);
+        if let Some(err) = input.error() {
+            return Err(err);
+        }
+        Ok(chans.into_iter().next().unwrap_or_default())
+    }
 }
 
 /// One countdown beep (1 kHz, 100 ms, −12 dBFS with 5 ms fades) at `sr`.

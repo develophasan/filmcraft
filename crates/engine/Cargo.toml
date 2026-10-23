@@ -32,6 +32,7 @@ filmcraft-scopes = { workspace = true }
 filmcraft-text = { workspace = true }
 filmcraft-audio-dsp = { workspace = true }
 filmcraft-export = { workspace = true }
+filmcraft-flac = { workspace = true }
 filmcraft-mxf = { workspace = true }
 filmcraft-format = { workspace = true }
 filmcraft-interchange = { workspace = true }

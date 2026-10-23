@@ -33,11 +33,21 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     icons::paint(&p, home.shrink(5.0), Icon::Home, if hresp.hovered() { t.text } else { t.text_dim });
     if hresp.clicked() {
-        app.ui.mode = Mode::Import;
+        app.ui.mode = Mode::CrStudio;
     }
     x = home.max.x + 16.0;
     // Mode tabs (14 pt; active = primary text with a 2 pt underline under the label)
-    for (m, label, shown) in [(Mode::Import, "Import", tl!("Import")), (Mode::Edit, "Edit", tl!("Edit")), (Mode::Export, "Export", tl!("Export"))] {
+    let simple = app.ui.simple_mode;
+    for (m, label, shown) in [
+        (Mode::CrStudio, "CrStudio", "CrStudio"),
+        (Mode::Import, "Import", tl!("Import")),
+        (Mode::Edit, "Edit", if simple { "Kurgu masası" } else { tl!("Edit") }),
+        (Mode::Export, "Export", tl!("Export")),
+    ] {
+        // simple mode: the studio and its cutting room only
+        if simple && matches!(m, Mode::Import | Mode::Export) && app.ui.mode != m {
+            continue;
+        }
         let active = app.ui.mode == m;
         let galley = p.layout_no_wrap(shown.to_string(), Tokens::ui(14.0), if active { t.tab_text_active } else { t.tab_text });
         let r = Rect::from_min_size(pos2(x - 6.0, rect.min.y + 6.0), vec2(galley.size().x + 12.0, rect.height() - 12.0));
@@ -120,17 +130,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let wresp = ui.interact(wr, egui::Id::new("hdr-ws-name"), Sense::click());
     app.auto.add("header.workspaceName", wr, &ws);
     p.galley_with_override_text_color(pos2(wr.min.x + 4.0, rect.center().y - wg.size().y / 2.0), wg, if wresp.hovered() { t.text } else { t.text_dim });
-    // Community: a labelled Discord button, always one click away.
+    // The sequence/project title, centred in the gap left of the workspace name.
     {
-        let label = "Discord";
-        let g = p.layout_no_wrap(label.to_string(), Tokens::ui(12.0), Color32::WHITE);
-        let w = g.size().x + 34.0;
-        let r = Rect::from_min_size(pos2(wr.min.x - w - 14.0, rect.center().y - 12.0), vec2(w, 24.0));
-        let resp = ui.interact(r, egui::Id::new("hdr-discord"), Sense::click()).on_hover_text(tl!("Join the ArtCraft Discord (discord.gg/artcraft)"));
-        app.auto.add("header.discord", r, "Join the ArtCraft Discord");
-        ui.painter().rect_filled(r, 12.0, if resp.hovered() { t.accent_hover } else { t.accent });
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(14.0, 14.0)), Icon::Chat, Color32::WHITE);
-        ui.painter().galley(pos2(r.min.x + 25.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
+        let r = Rect::from_min_size(pos2(wr.min.x - 14.0, rect.center().y - 12.0), vec2(0.0, 24.0));
         // Localized menus and user titles can be wider than English. Use the actual gap.
         let left = left_end + 12.0;
         let right = r.min.x - 12.0;
@@ -146,10 +148,6 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 galley,
                 t.tab_text_active,
             );
-        }
-
-        if resp.clicked() {
-            crate::links::open(app, ui.ctx(), crate::links::DISCORD);
         }
     }
     let popup_id = egui::Id::new("workspaces-popup");

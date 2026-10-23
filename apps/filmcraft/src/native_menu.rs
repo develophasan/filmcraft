@@ -28,7 +28,7 @@ pub fn install(app: &FilmcraftApp, ctx: egui::Context) -> (Receiver<String>, Men
     let mut native: Vec<(Item, MenuItem)> = Vec::new();
     let mut titles: Vec<(String, Submenu)> = Vec::new();
     let bar = Menu::new();
-    let app_menu = Submenu::new("FilmCraft", true);
+    let app_menu = Submenu::new("CrStudio", true);
     let [settings_label, hide_label, hide_others_label, quit_label] = NATIVE_APP_MENU;
     // FilmCraft ▸ Settings ▸ <category> (Premiere's app-menu layout; General is Cmd+,)
     let settings = Submenu::new(app.ui.language.tr(settings_label), true);
@@ -41,9 +41,8 @@ pub fn install(app: &FilmcraftApp, ctx: egui::Context) -> (Receiver<String>, Men
     }
     // About and Discord repeat Help menu commands: same translated labels, updated with them
     let label = |id: &str, english: &str| items.iter().find(|i| i.id == id).map_or_else(|| english.to_string(), |i| i.label.clone());
-    let about = MenuItem::with_id("app.about", label("app.about", "About FilmCraft"), true, None);
-    let discord = MenuItem::with_id("help.discord", label("help.discord", "Join the ArtCraft Discord…"), true, None);
-    for (id, mi) in [("app.about", &about), ("help.discord", &discord)] {
+    let about = MenuItem::with_id("app.about", label("app.about", "About CrStudio"), true, None);
+    for (id, mi) in [("app.about", &about)] {
         if let Some(it) = items.iter().find(|i| i.id == id) {
             // recorded as built (enabled, no shortcut), so the first update applies the real state
             native.push((Item { enabled: true, shortcut: None, ..it.clone() }, mi.clone()));
@@ -58,7 +57,6 @@ pub fn install(app: &FilmcraftApp, ctx: egui::Context) -> (Receiver<String>, Men
     let [(_, hide), (_, hide_others), (_, quit)] = &predefined;
     let _ = app_menu.append_items(&[
         &about,
-        &discord,
         &PredefinedMenuItem::separator(),
         &settings,
         &PredefinedMenuItem::separator(),
@@ -135,6 +133,8 @@ pub fn install(app: &FilmcraftApp, ctx: egui::Context) -> (Receiver<String>, Men
             filmcraft_ui_egui::i18n::Language::It
         } else if checked("app.language.korean") {
             filmcraft_ui_egui::i18n::Language::Ko
+        } else if checked("app.language.turkish") {
+            filmcraft_ui_egui::i18n::Language::Tr
         } else {
             filmcraft_ui_egui::i18n::Language::En
         };

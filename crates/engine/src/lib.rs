@@ -16,6 +16,7 @@ pub mod captions;
 pub mod clip_ops;
 pub mod color;
 pub mod commands;
+pub mod crstudio;
 pub mod demo;
 pub mod doc_path;
 pub mod essential_sound;
@@ -448,6 +449,8 @@ pub struct Session {
     pub media_stamps: std::collections::HashMap<String, media_watch::Stamp>,
     /// The stamps being taken on a worker thread ([`Session::start_media_scan`]).
     pub media_scan: Option<media_watch::MediaScan>,
+    /// CrStudio multi-agent documentary automation state.
+    pub crstudio: crstudio::CrStudioState,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -540,6 +543,7 @@ impl Session {
             exec_depth: 0,
             media_stamps: Default::default(),
             media_scan: None,
+            crstudio: Default::default(),
         }
     }
 
@@ -622,6 +626,7 @@ impl Session {
     /// Apply worker notifications (call regularly, e.g. once per UI frame). Also applies the
     /// results of finished proxy / ingest jobs.
     pub fn poll_persistence(&mut self) {
+        let _ = crstudio::poll(self);
         proxies::poll(self);
         masks::poll(self);
         scene_detect::poll(self);

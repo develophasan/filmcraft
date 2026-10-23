@@ -178,6 +178,99 @@ pub struct ControlParams {
     pub params: Option<Value>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CrStudioCreateParams {
+    /// Video format preset: `youtube_shorts` (9:16), `youtube_video` (16:9), `instagram_reels` (9:16) or `instagram_video` (4:5).
+    pub format: String,
+    /// Project title / documentary topic.
+    pub title: String,
+    /// Documentary tone: `investigative_vox`, `history_mystery`, `science_tech` or `viral_fast`.
+    #[serde(default)]
+    pub tone: Option<String>,
+    /// Target duration in seconds (e.g. 45 for Shorts, 180 for YouTube Video).
+    #[serde(default)]
+    pub target_duration_sec: Option<f64>,
+    /// Optional extra instructions for the script/storyboard agents.
+    #[serde(default)]
+    pub extra_instructions: Option<String>,
+    /// Immediately run Agents 1-4 (Scriptwriter, Storyboarder, Visual Hunter, Map/Visual Curator). Default true.
+    #[serde(default)]
+    pub run_agents: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CrStudioSceneUpdateParams {
+    /// 0-based scene index.
+    pub scene_index: usize,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub narration_text: Option<String>,
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    /// `stock_photo` | `animated_map` | `evidence_highlight` | `infographic_chart` | `chapter_card`
+    #[serde(default)]
+    pub visual_type: Option<String>,
+    #[serde(default)]
+    pub visual_query: Option<String>,
+    /// `zoom_in` | `zoom_out` | `pan_right` | `pan_left` | `dramatic_push`
+    #[serde(default)]
+    pub camera_motion: Option<String>,
+    #[serde(default)]
+    pub selected_visual: Option<String>,
+    #[serde(default)]
+    pub overlay_template: Option<String>,
+    #[serde(default)]
+    pub overlay_title: Option<String>,
+    #[serde(default)]
+    pub overlay_subtitle: Option<String>,
+    #[serde(default)]
+    pub sfx_cue: Option<String>,
+    #[serde(default)]
+    pub approved: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CrStudioMapParams {
+    /// 0-based scene index.
+    pub scene_index: usize,
+    pub location_name: String,
+    pub lat: f64,
+    pub lon: f64,
+    #[serde(default)]
+    pub from_lat: Option<f64>,
+    #[serde(default)]
+    pub from_lon: Option<f64>,
+    #[serde(default)]
+    pub zoom: Option<f64>,
+    #[serde(default)]
+    pub subtitle: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct CrStudioVoiceoverParams {
+    /// 0-based scene index (omit or set `all: true` to synthesize all scenes).
+    #[serde(default)]
+    pub scene_index: Option<usize>,
+    #[serde(default)]
+    pub all: Option<bool>,
+    #[serde(default)]
+    pub voice: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct CrStudioAuditParams {
+    /// Royalty-free mysterious documentary background music style: `mystery_dark_drone`, `investigative_pulse`, `historical_suspense`, `cosmic_synth`, or `none`.
+    #[serde(default)]
+    pub bgm_style: Option<String>,
+    /// Background music base volume in dB (default `-14.0`).
+    #[serde(default)]
+    pub bgm_volume_db: Option<f64>,
+    /// Automatically duck background music under narrator voiceover (`true` by default).
+    #[serde(default)]
+    pub bgm_auto_duck: Option<bool>,
+}
+
 fn ok_json(v: &Value) -> CallToolResult {
     CallToolResult::success(vec![Content::text(serde_json::to_string_pretty(v).unwrap_or_default())])
 }
@@ -553,6 +646,184 @@ impl FilmcraftMcp {
     )]
     async fn ui_control(&self, Parameters(p): Parameters<ControlParams>) -> Result<CallToolResult, McpError> {
         self.ui(&p.method, p.params.unwrap_or(json!({}))).await
+    }
+
+    #[tool(
+        title = "CrStudio: inspect automation pipeline",
+        description = "Inspect the current CrStudio YouTube/Instagram documentary automation state (format, title, stage, agent statuses, scenes, visual candidates, voiceovers, SEO metadata).",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn crstudio_status(&self) -> Result<CallToolResult, McpError> {
+        wrap(self.run("crstudio.status", json!({})).await)
+    }
+
+    #[tool(
+        title = "CrStudio: create project & run documentary agents",
+        description = "Create a new CrStudio automation project (`youtube_shorts`, `youtube_video`, `instagram_reels`, `instagram_video`) with a title and documentary tone, and run Agents 1-4 (Scriptwriter, Storyboarder, Royalty-Free Visual Hunter, Map/Visual Curator).",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true)
+    )]
+    async fn crstudio_create_project(&self, Parameters(p): Parameters<CrStudioCreateParams>) -> Result<CallToolResult, McpError> {
+        let mut args = json!({
+            "format": p.format,
+            "title": p.title,
+            "sync": true,
+        });
+        if let Some(t) = p.tone {
+            args["tone"] = json!(t);
+        }
+        if let Some(d) = p.target_duration_sec {
+            args["targetDurationSec"] = json!(d);
+        }
+        if let Some(e) = p.extra_instructions {
+            args["extraInstructions"] = json!(e);
+        }
+        if p.run_agents.unwrap_or(true) { wrap(self.run("crstudio.runPipeline", args).await) } else { wrap(self.run("crstudio.init", args).await) }
+    }
+
+    #[tool(
+        title = "CrStudio: update scene",
+        description = "Update a scene's narration text, visual type, visual search query, camera motion, selected visual candidate, graphic overlay or approval status.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn crstudio_update_scene(&self, Parameters(p): Parameters<CrStudioSceneUpdateParams>) -> Result<CallToolResult, McpError> {
+        let mut args = json!({"sceneIndex": p.scene_index});
+        if let Some(v) = p.title {
+            args["title"] = json!(v);
+        }
+        if let Some(v) = p.narration_text {
+            args["narrationText"] = json!(v);
+        }
+        if let Some(v) = p.duration_seconds {
+            args["durationSeconds"] = json!(v);
+        }
+        if let Some(v) = p.visual_type {
+            args["visualType"] = json!(v);
+        }
+        if let Some(v) = p.visual_query {
+            args["visualQuery"] = json!(v);
+        }
+        if let Some(v) = p.camera_motion {
+            args["cameraMotion"] = json!(v);
+        }
+        if let Some(v) = p.selected_visual {
+            args["selectedVisual"] = json!(v);
+        }
+        if let Some(v) = p.overlay_template {
+            args["overlayTemplate"] = json!(v);
+        }
+        if let Some(v) = p.overlay_title {
+            args["overlayTitle"] = json!(v);
+        }
+        if let Some(v) = p.overlay_subtitle {
+            args["overlaySubtitle"] = json!(v);
+        }
+        if let Some(v) = p.sfx_cue {
+            args["sfxCue"] = json!(v);
+        }
+        if let Some(v) = p.approved {
+            args["approved"] = json!(v);
+        }
+        wrap(self.run("crstudio.updateScene", args).await)
+    }
+
+    #[tool(
+        title = "CrStudio: generate documentary map",
+        description = "Generate a high-resolution Vox-style tactical documentary map PNG with coordinates and optional route arc for a scene.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn crstudio_generate_map(&self, Parameters(p): Parameters<CrStudioMapParams>) -> Result<CallToolResult, McpError> {
+        let mut args = json!({
+            "sceneIndex": p.scene_index,
+            "locationName": p.location_name,
+            "lat": p.lat,
+            "lon": p.lon,
+        });
+        if let Some(v) = p.from_lat {
+            args["fromLat"] = json!(v);
+        }
+        if let Some(v) = p.from_lon {
+            args["fromLon"] = json!(v);
+        }
+        if let Some(v) = p.zoom {
+            args["zoom"] = json!(v);
+        }
+        if let Some(v) = p.subtitle {
+            args["subtitle"] = json!(v);
+        }
+        wrap(self.run("crstudio.generateMap", args).await)
+    }
+
+    #[tool(
+        title = "CrStudio: synthesize scene voiceovers",
+        description = "Synthesize AI TTS narration audio WAVs for one scene or all scenes and measure exact durations.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn crstudio_synthesize_voiceover(&self, Parameters(p): Parameters<CrStudioVoiceoverParams>) -> Result<CallToolResult, McpError> {
+        let mut args = json!({});
+        if let Some(idx) = p.scene_index {
+            args["sceneIndex"] = json!(idx);
+        }
+        if let Some(all) = p.all {
+            args["all"] = json!(all);
+        }
+        if let Some(v) = p.voice {
+            args["voice"] = json!(v);
+        }
+        wrap(self.run("crstudio.synthesizeVoiceover", args).await)
+    }
+
+    #[tool(
+        title = "CrStudio: audit effects, transitions & mystery background score (Agent 5)",
+        description = "Run Agent 5 (Sound, Mystery Atmosphere & Effects Auditor) to synchronize narration/captions/visuals, assign scene transitions and Lumetri dark documentary effects, and compose the royalty-free mysterious documentary background score with auto-ducking.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn crstudio_audit_effects(&self, Parameters(p): Parameters<CrStudioAuditParams>) -> Result<CallToolResult, McpError> {
+        let mut args = json!({});
+        if let Some(st) = p.bgm_style {
+            args["bgmStyle"] = json!(st);
+        }
+        if let Some(vol) = p.bgm_volume_db {
+            args["bgmVolumeDb"] = json!(vol);
+        }
+        if let Some(duck) = p.bgm_auto_duck {
+            args["bgmAutoDuck"] = json!(duck);
+        }
+        wrap(self.run("crstudio.auditEffects", args).await)
+    }
+
+    #[tool(
+        title = "CrStudio: assemble master timeline (Send to Studio)",
+        description = "Run Agent 6 (Master Editor) to build the complete multi-track sequence (V1 visuals/maps with B-Roll Sub-Cuts, 35mm film grain & Ken Burns keyframes, V2 .fcgt documentary graphics, V3 Brand Kit subscribe/end cards, C1 viral/cinematic captions, A1 voiceovers with crossfades, A2 J-Cut transition SFX, A3 ducked ambient score) and open it in the editor.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false)
+    )]
+    async fn crstudio_assemble_timeline(&self) -> Result<CallToolResult, McpError> {
+        let r = self.run("crstudio.assembleTimeline", json!({})).await;
+        if let Some(b) = self.bridge_client() {
+            let _ = b.call("ui.set", json!({"mode": "edit"})).await;
+        }
+        wrap(r)
+    }
+
+    #[tool(
+        title = "CrStudio: package YouTube thumbnail, chapters, multi-language SRTs & copyright shield (Agent 7)",
+        description = "Run Agent 7 to generate the 1280x720 High-CTR YouTube thumbnail PNG, MM:SS YouTube chapters, multi-language .srt subtitle files (TR, EN, DE, ES), and the copyright shield report.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn crstudio_package_youtube(&self) -> Result<CallToolResult, McpError> {
+        wrap(self.run("crstudio.packageYoutube", json!({})).await)
+    }
+
+    #[tool(
+        title = "CrStudio: auto-repurpose 16:9 documentary into 9:16 vertical Shorts/Reels sequence",
+        description = "Create a vertical 9:16 (1080x1920) YouTube Shorts / Instagram Reels sequence from the current CrStudio project with vertical framing, viral word-by-word captions, and subscribe CTA.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false)
+    )]
+    async fn crstudio_create_shorts_cut(&self) -> Result<CallToolResult, McpError> {
+        let r = self.run("crstudio.createShortsCut", json!({})).await;
+        if let Some(b) = self.bridge_client() {
+            let _ = b.call("ui.set", json!({"mode": "edit"})).await;
+        }
+        wrap(r)
     }
 }
 

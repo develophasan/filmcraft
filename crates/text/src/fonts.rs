@@ -106,6 +106,10 @@ impl DirectorySource {
                 dirs.push(h.join(".fonts"));
             }
         }
+        // CrStudio's own font folder (the channel faces and their OFL companions; never in the repo)
+        if let Some(h) = &home {
+            dirs.push(h.join(".crstudio").join("fonts"));
+        }
         Self { dirs }
     }
 }

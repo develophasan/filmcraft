@@ -5,6 +5,7 @@ pub mod agent;
 pub mod audio_fx_editor;
 pub mod clip_dialogs;
 pub mod color_dialogs;
+pub mod crstudio;
 pub mod dialogs;
 pub mod effect_controls;
 pub mod effects;

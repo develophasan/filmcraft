@@ -63,7 +63,7 @@ pub struct GeneralPrefs {
 impl Default for GeneralPrefs {
     fn default() -> Self {
         Self {
-            interface_language: "system".into(),
+            interface_language: "tr".into(),
             at_startup: "showHome".into(),
             when_opening_project: "showOpenDialog".into(),
             bins_double_click: "openInPlace".into(),

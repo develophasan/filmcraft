@@ -1915,6 +1915,7 @@ dependencies = [
  "filmcraft-dng",
  "filmcraft-edit",
  "filmcraft-export",
+ "filmcraft-flac",
  "filmcraft-format",
  "filmcraft-frame",
  "filmcraft-geom",

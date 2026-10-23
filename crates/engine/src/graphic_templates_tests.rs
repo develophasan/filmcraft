@@ -128,7 +128,7 @@ fn mogrt_files_are_never_read() {
 fn builtin_templates_apply_and_thumbnail() {
     let mut s = demo("gt-builtin");
     let list = s.execute("graphics.template.list", json!({"category": "Callouts"})).unwrap();
-    assert_eq!(list.as_array().unwrap().len(), 2);
+    assert_eq!(list.as_array().unwrap().len(), 4);
     for e in s.execute("graphics.template.list", json!({"source": "builtin"})).unwrap().as_array().unwrap().clone() {
         let id = e["id"].as_str().unwrap();
         let r = s.execute("graphics.template.apply", json!({"template": id})).unwrap();
@@ -396,8 +396,11 @@ fn graphics_set_keyframe_animates_a_layer_property() {
     assert_eq!(layer_keys(&s), 0);
     // with it, each call writes a keyframe and the property animates
     s.execute("graphics.set", json!({"clip": c.0, "layer": 0, "props": {"opacity": 0}, "time": start.0, "keyframe": true})).unwrap();
-    s.execute("graphics.set", json!({"clip": c.0, "layer": 0, "props": {"opacity": 100}, "time": start.0 + filmcraft_time::TICKS_PER_SECOND, "keyframe": true}))
-        .unwrap();
+    s.execute(
+        "graphics.set",
+        json!({"clip": c.0, "layer": 0, "props": {"opacity": 100}, "time": start.0 + filmcraft_time::TICKS_PER_SECOND, "keyframe": true}),
+    )
+    .unwrap();
     assert_eq!(layer_keys(&s), 2);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(layer_keys(&s), 1);

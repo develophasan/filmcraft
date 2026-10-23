@@ -164,9 +164,10 @@ impl PlaybackRes {
     }
 }
 
-/// Header mode (Import / Edit / Export).
+/// Header mode (CrStudio / Import / Edit / Export).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
+    CrStudio,
     Import,
     #[default]
     Edit,
@@ -457,6 +458,10 @@ pub struct UiState {
     #[serde(default)]
     pub effect_controls_split: f32,
     pub show_menu_bar: bool,
+    /// CrStudio's simple mode: the header shows only CrStudio and the cutting room (Kurgu); Import
+    /// and Export — the full editor's own screens — appear in expert mode.
+    #[serde(default = "shown")]
+    pub simple_mode: bool,
     /// The header bar (Home, Import, Edit, Export, workspaces). An app that embeds FilmCraft can hide it.
     #[serde(default = "shown")]
     pub show_header: bool,
@@ -972,6 +977,7 @@ impl Default for UiState {
             lumetri_grid_folder: None,
             collapsed_fx: vec![],
             effect_controls_split: 0.0,
+            simple_mode: true,
             show_menu_bar: true,
             show_header: true,
             show_status_bar: true,

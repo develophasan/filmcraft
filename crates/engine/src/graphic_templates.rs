@@ -310,12 +310,23 @@ fn fold_undo(s: &mut Session, before: usize, label: &str) {
 fn apply_template(s: &mut Session, p: &Value) -> Result<Value> {
     let key = str_p(p, "template").or_else(|| str_p(p, "id")).or_else(|| str_p(p, "name")).ok_or_else(|| bad("graphics.template.apply", "need `template`"))?;
     let entry = find_template(s, key)?;
-    let t = entry.template;
+    let mut t = entry.template;
+    // optional channel theme (recolours the instance, not the stored template)
+    if let Some(theme) = str_p(p, "theme") {
+        filmcraft_project::gtemplate::apply_theme(&mut t, theme);
+    }
     register_fonts(&t);
     let (w, h) = s.active_sequence().map(|q| (q.settings.width, q.settings.height)).ok_or(EngineError::NoSequence)?;
     let (layers, meta) = t.instantiate((w, h));
     let before = s.history.undo.len();
-    let dur = t.duration;
+    // `duration` (ticks) or `durationSeconds` override the template's own length.
+    let dur = p
+        .get("duration")
+        .and_then(Value::as_i64)
+        .map(Tick)
+        .or_else(|| p.get("durationSeconds").and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| Tick::from_seconds_f64(v.clamp(0.04, 3600.0))))
+        .filter(|d| d.0 > 0)
+        .unwrap_or(t.duration);
     let clip = place_video_clip(s, "graphics.template.apply", &t.name, p, "Apply Graphics Template", layers, move |pr, (w, h, rate)| {
         let src = crate::graphics::graphic_source(pr, w, h, rate);
         (src, rate.snap_nearest(dur))

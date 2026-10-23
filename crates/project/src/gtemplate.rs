@@ -402,6 +402,64 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 // ------------------------------------------------------------------------------------------------
+// Themes: recolour a template to a channel look at apply time (the template itself is unchanged)
+// ------------------------------------------------------------------------------------------------
+
+/// Text layers that sit on an accent-coloured shape in the built-ins (they need dark ink once the
+/// accent turns light amber).
+const ON_ACCENT: &[&str] = &["CTA", "Tarih", "Etiket Yazısı", "Tag", "Badge Text"];
+
+/// Recolour `t` for a channel theme. `atlas` (CrStudio's Kadim Atlas): every saturated accent
+/// (red, rose, sky, yellow) becomes amber, the slate/navy grounds become warm near-black, light
+/// greys become cream, and Inter becomes Barlow. Unknown themes leave the template as it is.
+pub fn apply_theme(t: &mut GraphicsTemplate, theme: &str) {
+    if theme != "atlas" {
+        return;
+    }
+    const AMBER: [f32; 3] = [0.949, 0.635, 0.180];
+    const GROUND: [f32; 3] = [0.055, 0.047, 0.039];
+    const CREAM: [f32; 3] = [0.961, 0.914, 0.816];
+    const INK: [f32; 3] = [0.078, 0.067, 0.051];
+    let remap = |c: [f32; 4]| -> [f32; 4] {
+        let [r, g, b, a] = c;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let sat = if max > 0.0 { (max - min) / max } else { 0.0 };
+        let out = if sat > 0.45 && max > 0.45 {
+            AMBER
+        } else if max < 0.25 {
+            GROUND
+        } else if min > 0.75 {
+            CREAM
+        } else {
+            [r, g, b]
+        };
+        [out[0], out[1], out[2], a]
+    };
+    for e in &mut t.layers {
+        let name = match e.params.get("name").map(|p| &p.value) {
+            Some(ParamValue::Text(n)) => n.clone(),
+            _ => String::new(),
+        };
+        for key in ["fill_color", "stroke_color", "background_color"] {
+            if let Some(Param { value: ParamValue::Color(c), .. }) = e.params.get_mut(key) {
+                *c = remap(*c);
+            }
+        }
+        if ON_ACCENT.contains(&name.as_str())
+            && let Some(Param { value: ParamValue::Color(c), .. }) = e.params.get_mut("fill_color")
+        {
+            *c = [INK[0], INK[1], INK[2], c[3]];
+        }
+        if let Some(Param { value: ParamValue::Text(f), .. }) = e.params.get_mut("font")
+            && f == "Inter"
+        {
+            *f = "Barlow".into();
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
 // Built-in templates (original designs)
 // ------------------------------------------------------------------------------------------------
 
@@ -531,6 +589,40 @@ pub fn builtin_templates() -> Vec<GraphicsTemplate> {
                 ctl("rule_color", "Rule Color", 2, "fill_color"),
                 ctl("font", "Font", 1, "font"),
                 slider("name_size", "Name Size", 1, "size", 24.0, 140.0),
+            ],
+        ));
+    }
+    // Kadim Atlas lower third (CrStudio's channel look): amber tag, title in the channel face,
+    // one body line, all on a dark plate that follows the title's width. Falls back to the default
+    // font when the channel fonts are not installed.
+    {
+        let mut plate = shape(1, "Plate", 0, (420.0, 912.0), (640.0, 212.0), 0x0e0c0a);
+        set(&mut plate, "opacity", ParamValue::Float(80.0));
+        set(&mut plate, "corner_radius", ParamValue::Float(14.0));
+        pin(&mut plate, 3, [true, false, true, false], [-44.0, 0.0, 56.0, 0.0]);
+        let mut tag = shape(2, "Tag", 0, (210.0, 838.0), (200.0, 42.0), 0xf2a22e);
+        pin(&mut tag, 4, [true, false, true, false], [-16.0, 0.0, 16.0, 0.0]);
+        let mut kicker = text(4, "Kicker", "BÖLÜM", (132.0, 851.0), 27.0, "Bold");
+        set(&mut kicker, "font", ParamValue::Text("Barlow Condensed".into()));
+        set(&mut kicker, "fill_color", rgb(0x14110d));
+        let mut title = text(3, "Title", "YEDİ UYURLAR", (130.0, 928.0), 68.0, "Regular");
+        set(&mut title, "font", ParamValue::Text("Efsaneler Başlık Sülüs".into()));
+        set(&mut title, "fill_color", rgb(0xf5e9d0));
+        let mut body = text(5, "Body", "Efes'te yedi genç bir mağaraya sığındı.", (132.0, 980.0), 32.0, "SemiBold");
+        set(&mut body, "font", ParamValue::Text("Barlow".into()));
+        set(&mut body, "fill_color", rgb(0xf5e9d0));
+        v.push(builtin(
+            "atlas-lower-third",
+            "Lower Third – Kadim Atlas",
+            "Lower Thirds",
+            "Amber tag, title in the channel face and one line on a dark plate (CrStudio channel look).",
+            6,
+            vec![plate, tag, kicker, title, body],
+            vec![
+                ctl("kicker", "Tag", 4, "text"),
+                ctl("title", "Title", 3, "text"),
+                ctl("body", "Body", 5, "text"),
+                ctl("accent", "Accent Color", 2, "fill_color"),
             ],
         ));
     }
@@ -697,6 +789,479 @@ pub fn builtin_templates() -> Vec<GraphicsTemplate> {
         t.graphic.roll = Roll { mode: RollMode::CrawlLeft, start_off_screen: true, end_off_screen: true, ..Default::default() };
         v.push(t);
     }
+    // Documentary: Map Location Pin + coordinate card (CrStudio).
+    {
+        let mut ring = shape(1, "Pin Ring", 1, (960.0, 470.0), (54.0, 54.0), 0xef4444);
+        set(&mut ring, "opacity", ParamValue::Float(85.0));
+        set(&mut ring, "stroke", ParamValue::Bool(true));
+        set(&mut ring, "stroke_color", rgb(0xffffff));
+        set(&mut ring, "stroke_width", ParamValue::Float(4.0));
+        let core = shape(2, "Pin Core", 1, (960.0, 470.0), (20.0, 20.0), 0xffffff);
+        let mut card = shape(3, "Card", 0, (960.0, 575.0), (520.0, 108.0), 0x0f172a);
+        set(&mut card, "corner_radius", ParamValue::Float(12.0));
+        set(&mut card, "opacity", ParamValue::Float(92.0));
+        let mut loc = text(4, "Location", "ISTANBUL, TURKEY", (960.0, 562.0), 42.0, "Bold");
+        set(&mut loc, "align", ParamValue::Choice(1));
+        set(&mut loc, "fill_color", rgb(0xffffff));
+        set(&mut loc, "tracking", ParamValue::Float(40.0));
+        let mut coords = text(5, "Coordinates", "41.0082 N, 28.9784 E  •  LOCATION FOCUS", (960.0, 606.0), 24.0, "Medium");
+        set(&mut coords, "align", ParamValue::Choice(1));
+        set(&mut coords, "fill_color", rgb(0x38bdf8));
+        v.push(builtin(
+            "doc-map-pin",
+            "Documentary – Map Location Pin",
+            "Callouts",
+            "Animated documentary map marker with location title and coordinates.",
+            5,
+            vec![card, ring, core, loc, coords],
+            vec![
+                ctl("location", "Location", 4, "text"),
+                ctl("coordinates", "Coordinates", 5, "text"),
+                ctl("pin_color", "Pin Color", 1, "fill_color"),
+                ctl("card_color", "Card Color", 3, "fill_color"),
+                ctl("position", "Pin Position", 1, "position"),
+            ],
+        ));
+    }
+    // Documentary: Evidence / Newspaper Highlight Quote (CrStudio).
+    {
+        let mut card = shape(1, "Evidence Card", 0, (960.0, 860.0), (1360.0, 185.0), 0x0f172a);
+        set(&mut card, "corner_radius", ParamValue::Float(14.0));
+        set(&mut card, "opacity", ParamValue::Float(92.0));
+        let mut bar = shape(2, "Highlight Bar", 0, (960.0, 835.0), (1260.0, 72.0), 0xfacc15);
+        set(&mut bar, "corner_radius", ParamValue::Float(6.0));
+        set(&mut bar, "opacity", ParamValue::Float(95.0));
+        let mut quote = text(3, "Quote", "\"The decisive turning point remained classified for decades.\"", (960.0, 848.0), 40.0, "Bold");
+        set(&mut quote, "align", ParamValue::Choice(1));
+        set(&mut quote, "fill_color", rgb(0x111827));
+        let mut source = text(4, "Source", "SOURCE: HISTORICAL ARCHIVE DOCUMENT", (960.0, 916.0), 26.0, "SemiBold");
+        set(&mut source, "align", ParamValue::Choice(1));
+        set(&mut source, "fill_color", rgb(0xe2e8f0));
+        set(&mut source, "tracking", ParamValue::Float(50.0));
+        v.push(builtin(
+            "doc-highlight-quote",
+            "Documentary – Evidence Highlight",
+            "Callouts",
+            "Vox-style documentary evidence highlighter with source citation.",
+            6,
+            vec![card, bar, quote, source],
+            vec![
+                ctl("quote", "Quote", 3, "text"),
+                ctl("source", "Source", 4, "text"),
+                ctl("highlight_color", "Highlight Color", 2, "fill_color"),
+                ctl("card_color", "Card Color", 1, "fill_color"),
+            ],
+        ));
+    }
+    // Documentary: Chapter Title Card (CrStudio).
+    {
+        let mut backdrop = shape(1, "Backdrop", 0, (960.0, 540.0), (1040.0, 330.0), 0x090d16);
+        set(&mut backdrop, "corner_radius", ParamValue::Float(18.0));
+        set(&mut backdrop, "opacity", ParamValue::Float(88.0));
+        let mut chap = text(2, "Chapter", "BÖLÜM I", (960.0, 430.0), 34.0, "Bold");
+        set(&mut chap, "align", ParamValue::Choice(1));
+        set(&mut chap, "fill_color", rgb(0xf59e0b));
+        set(&mut chap, "tracking", ParamValue::Float(120.0));
+        let rule = shape(3, "Accent Line", 0, (960.0, 462.0), (160.0, 5.0), 0xef4444);
+        let mut title = text(4, "Title", "GİZLİ DOSYA", (960.0, 560.0), 82.0, "Bold");
+        set(&mut title, "align", ParamValue::Choice(1));
+        set(&mut title, "fill_color", rgb(0xffffff));
+        let mut sub = text(5, "Subtitle", "Tarihin akışını değiştiren kritik kırılma noktası", (960.0, 632.0), 34.0, "Regular");
+        set(&mut sub, "align", ParamValue::Choice(1));
+        set(&mut sub, "fill_color", rgb(0xcbd5e1));
+        v.push(builtin(
+            "doc-chapter-card",
+            "Documentary – Chapter Title",
+            "Titles",
+            "Cinematic documentary chapter card with chapter number, accent rule and subtitle.",
+            5,
+            vec![backdrop, chap, rule, title, sub],
+            vec![
+                ctl("chapter", "Chapter", 2, "text"),
+                ctl("title", "Title", 4, "text"),
+                ctl("subtitle", "Subtitle", 5, "text"),
+                ctl("accent_color", "Accent Color", 3, "fill_color"),
+                ctl("title_color", "Title Color", 4, "fill_color"),
+            ],
+        ));
+    }
+    // Shorts / Reels: Viral Hook Banner (CrStudio).
+    {
+        let mut banner = shape(1, "Banner", 0, (960.0, 195.0), (960.0, 114.0), 0xdc2626);
+        set(&mut banner, "corner_radius", ParamValue::Float(18.0));
+        set(&mut banner, "opacity", ParamValue::Float(95.0));
+        let mut badge = shape(2, "Badge", 0, (960.0, 128.0), (360.0, 44.0), 0xfacc15);
+        set(&mut badge, "corner_radius", ParamValue::Float(10.0));
+        let mut tag = text(3, "Tag", "BUNU BİLİYOR MUYDUNUZ?", (960.0, 138.0), 26.0, "Bold");
+        set(&mut tag, "align", ParamValue::Choice(1));
+        set(&mut tag, "fill_color", rgb(0x111827));
+        let mut headline = text(4, "Headline", "HERKESİN GÖZDEN KAÇIRDIĞI DETAY", (960.0, 210.0), 48.0, "Bold");
+        set(&mut headline, "align", ParamValue::Choice(1));
+        set(&mut headline, "fill_color", rgb(0xffffff));
+        v.push(builtin(
+            "shorts-dynamic-hook",
+            "Shorts – Viral Hook Banner",
+            "Titles",
+            "High-retention top hook banner for YouTube Shorts and Instagram Reels.",
+            4,
+            vec![banner, badge, tag, headline],
+            vec![
+                ctl("tag", "Tag", 3, "text"),
+                ctl("headline", "Headline", 4, "text"),
+                ctl("banner_color", "Banner Color", 1, "fill_color"),
+                ctl("badge_color", "Badge Color", 2, "fill_color"),
+            ],
+        ));
+    }
+    // YouTube: Subscribe & Notification Bell Callout (CrStudio Brand Kit).
+    {
+        let mut pill = shape(1, "Subscribe Pill", 0, (1540.0, 930.0), (540.0, 96.0), 0x0f172a);
+        set(&mut pill, "corner_radius", ParamValue::Float(48.0));
+        set(&mut pill, "opacity", ParamValue::Float(94.0));
+        let mut btn = shape(2, "Red Button", 0, (1395.0, 930.0), (210.0, 68.0), 0xdc2626);
+        set(&mut btn, "corner_radius", ParamValue::Float(34.0));
+        let mut cta = text(3, "CTA", "ABONE OL", (1395.0, 942.0), 30.0, "Bold");
+        set(&mut cta, "align", ParamValue::Choice(1));
+        set(&mut cta, "fill_color", rgb(0xffffff));
+        let mut ch_name = text(4, "Channel", "CRSTUDIO BELGESEL", (1645.0, 924.0), 28.0, "Bold");
+        set(&mut ch_name, "align", ParamValue::Choice(1));
+        set(&mut ch_name, "fill_color", rgb(0xfacc15));
+        let mut sub_note = text(5, "Note", "BİLDİRİMLERİ AÇ • YENİ BÖLÜMLER", (1645.0, 956.0), 19.0, "Medium");
+        set(&mut sub_note, "align", ParamValue::Choice(1));
+        set(&mut sub_note, "fill_color", rgb(0xe2e8f0));
+        v.push(builtin(
+            "youtube-subscribe-cta",
+            "YouTube – Subscribe Callout",
+            "Callouts",
+            "Channel branding subscribe pill with notification reminder.",
+            4,
+            vec![pill, btn, cta, ch_name, sub_note],
+            vec![
+                ctl("channel", "Channel Name", 4, "text"),
+                ctl("cta", "Button Text", 3, "text"),
+                ctl("note", "Subtitle", 5, "text"),
+                ctl("button_color", "Button Color", 2, "fill_color"),
+            ],
+        ));
+    }
+    // YouTube: Documentary End Screen Frame (Next Video + Subscribe Circle).
+    {
+        let mut backdrop = shape(1, "End Backdrop", 0, (960.0, 540.0), (1680.0, 820.0), 0x090d16);
+        set(&mut backdrop, "corner_radius", ParamValue::Float(24.0));
+        set(&mut backdrop, "opacity", ParamValue::Float(86.0));
+        let mut next_box = shape(2, "Next Video Frame", 0, (620.0, 560.0), (720.0, 405.0), 0x1e293b);
+        set(&mut next_box, "corner_radius", ParamValue::Float(16.0));
+        set(&mut next_box, "stroke", ParamValue::Bool(true));
+        set(&mut next_box, "stroke_color", rgb(0xfacc15));
+        set(&mut next_box, "stroke_width", ParamValue::Float(5.0));
+        let mut sub_ring = shape(3, "Subscribe Circle", 1, (1390.0, 560.0), (240.0, 240.0), 0xdc2626);
+        set(&mut sub_ring, "stroke", ParamValue::Bool(true));
+        set(&mut sub_ring, "stroke_color", rgb(0xffffff));
+        set(&mut sub_ring, "stroke_width", ParamValue::Float(5.0));
+        let mut heading = text(4, "Heading", "SIRADAKİ ARAŞTIRMA DOSYASI", (960.0, 245.0), 54.0, "Bold");
+        set(&mut heading, "align", ParamValue::Choice(1));
+        set(&mut heading, "fill_color", rgb(0xfacc15));
+        let mut ch_label = text(5, "Channel", "ABONE OL & TAKİPTE KAL", (1390.0, 825.0), 32.0, "Bold");
+        set(&mut ch_label, "align", ParamValue::Choice(1));
+        set(&mut ch_label, "fill_color", rgb(0xffffff));
+        v.push(builtin(
+            "youtube-end-screen",
+            "YouTube – End Screen Card",
+            "End Credits",
+            "YouTube documentary end screen with Next Video placeholder frame and Subscribe badge.",
+            5,
+            vec![backdrop, next_box, sub_ring, heading, ch_label],
+            vec![ctl("heading", "Heading", 4, "text"), ctl("channel", "Subscribe Label", 5, "text"), ctl("frame_color", "Frame Border", 2, "stroke_color")],
+        ));
+    }
+    // ---------------------------------------------------------------------------------------
+    // CrStudio YouTuber pack (original designs; colours are controls so the channel kit can set them)
+    // ---------------------------------------------------------------------------------------
+    // Info box (top right): accent bar, title, wrapped body.
+    {
+        let mut card = shape(1, "Kart", 0, (1500.0, 205.0), (720.0, 190.0), 0x0b1220);
+        set(&mut card, "corner_radius", ParamValue::Float(18.0));
+        set(&mut card, "opacity", ParamValue::Float(93.0));
+        let bar = shape(2, "Vurgu", 0, (1146.0, 205.0), (12.0, 190.0), 0x38bdf8);
+        let mut title = text(3, "Başlık", "BİLİYOR MUYDUNUZ?", (1172.0, 150.0), 28.0, "Bold");
+        set(&mut title, "fill_color", rgb(0x38bdf8));
+        set(&mut title, "tracking", ParamValue::Float(60.0));
+        let mut body = text(4, "Metin", "Bu efsane en az beş farklı kültürde anlatılır.", (1172.0, 172.0), 32.0, "Medium");
+        set(&mut body, "fill_color", rgb(0xf1f5f9));
+        set(&mut body, "box_width", ParamValue::Float(650.0));
+        set(&mut body, "box_height", ParamValue::Float(110.0));
+        v.push(builtin(
+            "yt-info-box",
+            "YouTuber – Bilgi Kutusu",
+            "Callouts",
+            "Ek bilgi kutusu: vurgu çubuğu, başlık ve kendiliğinden kırılan metin.",
+            5,
+            vec![card, bar, title, body],
+            vec![
+                ctl("title", "Başlık", 3, "text"),
+                ctl("text", "Metin", 4, "text"),
+                ctl("accent", "Vurgu Rengi", 2, "fill_color"),
+                ctl("card", "Kart Rengi", 1, "fill_color"),
+            ],
+        ));
+    }
+    // Warning box: amber, for "commonly misunderstood" facts.
+    {
+        let mut card = shape(1, "Kart", 0, (1500.0, 205.0), (720.0, 190.0), 0x1c1204);
+        set(&mut card, "corner_radius", ParamValue::Float(18.0));
+        set(&mut card, "opacity", ParamValue::Float(94.0));
+        set(&mut card, "stroke", ParamValue::Bool(true));
+        set(&mut card, "stroke_color", rgb(0xf59e0b));
+        set(&mut card, "stroke_width", ParamValue::Float(3.0));
+        let mut title = text(3, "Başlık", "DİKKAT", (1172.0, 150.0), 30.0, "Bold");
+        set(&mut title, "fill_color", rgb(0xfbbf24));
+        let mut body = text(4, "Metin", "Bu bilgi sık sık yanlış aktarılır.", (1172.0, 172.0), 32.0, "Medium");
+        set(&mut body, "fill_color", rgb(0xfef3c7));
+        set(&mut body, "box_width", ParamValue::Float(650.0));
+        set(&mut body, "box_height", ParamValue::Float(110.0));
+        v.push(builtin(
+            "yt-warning-box",
+            "YouTuber – Uyarı Kutusu",
+            "Callouts",
+            "Yanlış bilinen bir şeyi düzelten uyarı kutusu.",
+            5,
+            vec![card, title, body],
+            vec![ctl("title", "Başlık", 3, "text"), ctl("text", "Metin", 4, "text"), ctl("border", "Çerçeve Rengi", 1, "stroke_color")],
+        ));
+    }
+    // Speech bubble: a rounded bubble with a tail.
+    {
+        let mut bubble = shape(1, "Balon", 0, (1300.0, 300.0), (760.0, 200.0), 0xffffff);
+        set(&mut bubble, "corner_radius", ParamValue::Float(60.0));
+        let tail = shape(2, "Kuyruk", 2, (1010.0, 420.0), (70.0, 70.0), 0xffffff);
+        let mut words = text(3, "Söz", "“Rabbimiz göklerin ve yerin Rabbidir.”", (950.0, 240.0), 38.0, "SemiBold");
+        set(&mut words, "fill_color", rgb(0x0f172a));
+        set(&mut words, "box_width", ParamValue::Float(700.0));
+        set(&mut words, "box_height", ParamValue::Float(150.0));
+        v.push(builtin(
+            "yt-speech-bubble",
+            "YouTuber – Konuşma Balonu",
+            "Callouts",
+            "Bir karakterin sözü için konuşma balonu.",
+            5,
+            vec![bubble, tail, words],
+            vec![ctl("text", "Söz", 3, "text"), ctl("bubble", "Balon Rengi", 1, "fill_color"), ctl("position", "Konum", 1, "position")],
+        ));
+    }
+    // Comment prompt: a question to the audience with a comment icon.
+    {
+        let mut card = shape(1, "Kart", 0, (960.0, 880.0), (1300.0, 150.0), 0x111827);
+        set(&mut card, "corner_radius", ParamValue::Float(75.0));
+        set(&mut card, "opacity", ParamValue::Float(94.0));
+        let icon = shape(2, "Simge", 0, (380.0, 880.0), (96.0, 96.0), 0xe11d48);
+        let mut q = text(3, "Soru", "Sizce hangisi doğru? Yorumlarda yazın!", (460.0, 845.0), 40.0, "Bold");
+        set(&mut q, "fill_color", rgb(0xffffff));
+        set(&mut q, "box_width", ParamValue::Float(1120.0));
+        set(&mut q, "box_height", ParamValue::Float(110.0));
+        let mut ic = text(4, "İkon", "?", (380.0, 900.0), 52.0, "Regular");
+        set(&mut ic, "align", ParamValue::Choice(1));
+        v.push(builtin(
+            "yt-comment-prompt",
+            "YouTuber – Yorumda Belirt",
+            "Callouts",
+            "İzleyiciye soru: yorumlara davet kartı.",
+            5,
+            vec![card, icon, q, ic],
+            vec![ctl("question", "Soru", 3, "text"), ctl("accent", "Simge Rengi", 2, "fill_color")],
+        ));
+    }
+    // Like reminder: a pill with a thumbs-up badge.
+    {
+        let mut pill = shape(1, "Hap", 0, (300.0, 960.0), (440.0, 96.0), 0x0f172a);
+        set(&mut pill, "corner_radius", ParamValue::Float(48.0));
+        set(&mut pill, "opacity", ParamValue::Float(94.0));
+        let badge = shape(2, "Rozet", 1, (135.0, 960.0), (78.0, 78.0), 0xe11d48);
+        let mut thumb = text(3, "Simge", "+1", (135.0, 978.0), 44.0, "Regular");
+        set(&mut thumb, "align", ParamValue::Choice(1));
+        let mut t = text(4, "Metin", "Beğenmeyi unutma!", (190.0, 972.0), 34.0, "Bold");
+        set(&mut t, "fill_color", rgb(0xffffff));
+        v.push(builtin(
+            "yt-like-reminder",
+            "YouTuber – Beğen Hatırlatıcı",
+            "Callouts",
+            "Beğen hatırlatması: başparmak rozetli hap.",
+            4,
+            vec![pill, badge, thumb, t],
+            vec![ctl("text", "Metin", 4, "text"), ctl("badge", "Rozet Rengi", 2, "fill_color")],
+        ));
+    }
+    // Source credit (bottom left, small).
+    {
+        let mut t = text(1, "Kaynak", "Kaynak: —", (60.0, 1040.0), 24.0, "Medium");
+        set(&mut t, "fill_color", rgb(0xe2e8f0));
+        set(&mut t, "background", ParamValue::Bool(true));
+        set(&mut t, "background_color", rgb(0x0b1220));
+        set(&mut t, "background_opacity", ParamValue::Float(80.0));
+        set(&mut t, "background_size", ParamValue::Float(10.0));
+        set(&mut t, "background_radius", ParamValue::Float(6.0));
+        v.push(builtin(
+            "yt-source-credit",
+            "YouTuber – Kaynak Gösterimi",
+            "Lower Thirds",
+            "Ekranın altında küçük kaynak satırı.",
+            5,
+            vec![t],
+            vec![ctl("source", "Kaynak", 1, "text")],
+        ));
+    }
+    // Timeline tag: a date stamp (top left).
+    {
+        let mut box_ = shape(1, "Kutu", 0, (210.0, 120.0), (300.0, 84.0), 0xe11d48);
+        set(&mut box_, "corner_radius", ParamValue::Float(10.0));
+        let mut d = text(2, "Tarih", "MS 250", (210.0, 135.0), 44.0, "Bold");
+        set(&mut d, "align", ParamValue::Choice(1));
+        set(&mut d, "fill_color", rgb(0xffffff));
+        pin(&mut box_, 2, [true; 4], [-36.0, -14.0, 36.0, 14.0]);
+        v.push(builtin(
+            "yt-timeline-tag",
+            "YouTuber – Tarih Etiketi",
+            "Callouts",
+            "Kronoloji için tarih damgası; kutu metne göre genişler.",
+            4,
+            vec![box_, d],
+            vec![ctl("date", "Tarih", 2, "text"), ctl("color", "Renk", 1, "fill_color")],
+        ));
+    }
+    // Countdown number (list videos).
+    {
+        let ring = shape(1, "Halka", 1, (960.0, 540.0), (300.0, 300.0), 0xe11d48);
+        let mut n = text(2, "Sayı", "3", (960.0, 600.0), 180.0, "Bold");
+        set(&mut n, "align", ParamValue::Choice(1));
+        set(&mut n, "fill_color", rgb(0xffffff));
+        v.push(builtin(
+            "yt-countdown",
+            "YouTuber – Geri Sayım",
+            "Titles",
+            "Sıralama videoları için büyük sayı.",
+            2,
+            vec![ring, n],
+            vec![ctl("number", "Sayı", 2, "text"), ctl("color", "Renk", 1, "fill_color")],
+        ));
+    }
+    // Shock badge: tilted bold sticker.
+    {
+        let mut t = text(1, "Metin", "İNANILMAZ!", (1500.0, 220.0), 64.0, "Bold");
+        set(&mut t, "align", ParamValue::Choice(1));
+        set(&mut t, "fill_color", rgb(0x111827));
+        set(&mut t, "background", ParamValue::Bool(true));
+        set(&mut t, "background_color", rgb(0xfacc15));
+        set(&mut t, "background_opacity", ParamValue::Float(100.0));
+        set(&mut t, "background_size", ParamValue::Float(22.0));
+        set(&mut t, "background_radius", ParamValue::Float(12.0));
+        set(&mut t, "rotation", ParamValue::Float(-6.0));
+        v.push(builtin(
+            "yt-shock-badge",
+            "YouTuber – Vurgu Etiketi",
+            "Callouts",
+            "Eğik, parlak vurgu etiketi.",
+            3,
+            vec![t],
+            vec![ctl("text", "Metin", 1, "text"), ctl("color", "Zemin Rengi", 1, "background_color")],
+        ));
+    }
+    // Watch next end screen: two video slots + subscribe circle (YouTube end-screen friendly).
+    {
+        let mut back = shape(1, "Zemin", 0, (960.0, 540.0), (1920.0, 1080.0), 0x05070d);
+        set(&mut back, "opacity", ParamValue::Float(70.0));
+        let mut a = shape(2, "Video 1", 0, (560.0, 560.0), (640.0, 360.0), 0x111827);
+        set(&mut a, "corner_radius", ParamValue::Float(14.0));
+        set(&mut a, "stroke", ParamValue::Bool(true));
+        set(&mut a, "stroke_color", rgb(0xffffff));
+        set(&mut a, "stroke_width", ParamValue::Float(3.0));
+        let mut b = shape(3, "Video 2", 0, (1260.0, 560.0), (640.0, 360.0), 0x111827);
+        set(&mut b, "corner_radius", ParamValue::Float(14.0));
+        set(&mut b, "stroke", ParamValue::Bool(true));
+        set(&mut b, "stroke_color", rgb(0xffffff));
+        set(&mut b, "stroke_width", ParamValue::Float(3.0));
+        let sub = shape(4, "Abone Halkası", 1, (1700.0, 900.0), (170.0, 170.0), 0xe11d48);
+        let mut h = text(5, "Başlık", "BUNU DA İZLE", (960.0, 250.0), 72.0, "Bold");
+        set(&mut h, "align", ParamValue::Choice(1));
+        set(&mut h, "fill_color", rgb(0xffffff));
+        set(&mut h, "tracking", ParamValue::Float(40.0));
+        let mut ch = text(6, "Kanal", "ABONE OL", (1700.0, 1015.0), 30.0, "Bold");
+        set(&mut ch, "align", ParamValue::Choice(1));
+        set(&mut ch, "fill_color", rgb(0xffffff));
+        v.push(builtin(
+            "yt-watch-next",
+            "YouTuber – Bunu da İzle (Bitiş Ekranı)",
+            "End Credits",
+            "Son 15-20 saniye: iki video yeri ve abone halkası (YouTube bitiş ekranı öğeleriyle hizalı).",
+            15,
+            vec![back, a, b, sub, h, ch],
+            vec![ctl("heading", "Başlık", 5, "text"), ctl("channel", "Abone Yazısı", 6, "text"), ctl("accent", "Abone Rengi", 4, "fill_color")],
+        ));
+    }
+    // Sponsor / ad band: a slim full-width strip below the caption zone (y 1004–1080) — used by the Assistant.
+    {
+        let mut band = shape(1, "Kuşak", 0, (960.0, 1042.0), (1920.0, 76.0), 0x0b1220);
+        set(&mut band, "opacity", ParamValue::Float(94.0));
+        let mut tag = shape(2, "Etiket", 0, (150.0, 1042.0), (220.0, 76.0), 0xe11d48);
+        set(&mut tag, "opacity", ParamValue::Float(100.0));
+        let mut sp = text(3, "Etiket Yazısı", "SPONSOR", (150.0, 1052.0), 24.0, "Bold");
+        set(&mut sp, "align", ParamValue::Choice(1));
+        set(&mut sp, "fill_color", rgb(0xffffff));
+        set(&mut sp, "tracking", ParamValue::Float(80.0));
+        let mut brand = text(4, "Marka", "MARKA ADI", (300.0, 1031.0), 28.0, "Bold");
+        set(&mut brand, "fill_color", rgb(0xffffff));
+        let mut msg = text(5, "Mesaj", "Kısa reklam mesajı burada", (300.0, 1064.0), 21.0, "Regular");
+        set(&mut msg, "fill_color", rgb(0xcbd5e1));
+        let mut cta = text(6, "Çağrı", "Detaylar açıklamada", (1820.0, 1052.0), 26.0, "SemiBold");
+        set(&mut cta, "align", ParamValue::Choice(2));
+        set(&mut cta, "fill_color", rgb(0xfacc15));
+        let mut t = builtin(
+            "yt-ad-band",
+            "YouTuber – Reklam / Sponsor Kuşağı",
+            "Lower Thirds",
+            "Altyazının altında, tam genişlikte ince kuşak: sponsor etiketi, marka, mesaj ve çağrı.",
+            8,
+            vec![band, tag, sp, brand, msg, cta],
+            vec![
+                ctl("label", "Etiket", 3, "text"),
+                ctl("brand", "Marka", 4, "text"),
+                ctl("text", "Mesaj", 5, "text"),
+                ctl("cta", "Çağrı", 6, "text"),
+                ctl("accent", "Etiket Rengi", 2, "fill_color"),
+                ctl("band", "Kuşak Rengi", 1, "fill_color"),
+            ],
+        );
+        t.tags.push("reklam".into());
+        v.push(t);
+    }
+    // Thumbnail headline (used to render the 1280×720 cover; designed at 1920×1080).
+    {
+        // two lines of 168 pt fit between y≈300 and the channel strip at y≈930
+        let mut h = text(1, "Başlık", "309 YIL UYKU", (110.0, 300.0), 168.0, "Bold");
+        set(&mut h, "fill_color", rgb(0xffffff));
+        set(&mut h, "stroke", ParamValue::Bool(true));
+        set(&mut h, "stroke_color", rgb(0x000000));
+        set(&mut h, "stroke_width", ParamValue::Float(10.0));
+        set(&mut h, "shadow", ParamValue::Bool(true));
+        set(&mut h, "shadow_distance", ParamValue::Float(8.0));
+        set(&mut h, "shadow_blur", ParamValue::Float(24.0));
+        set(&mut h, "shadow_opacity", ParamValue::Float(70.0));
+        set(&mut h, "box_width", ParamValue::Float(1150.0));
+        set(&mut h, "box_height", ParamValue::Float(520.0));
+        let mut bar = shape(2, "Şerit", 0, (330.0, 960.0), (440.0, 80.0), 0xe11d48);
+        set(&mut bar, "corner_radius", ParamValue::Float(10.0));
+        let mut tag = text(3, "Kanal", "CRSTUDIO", (330.0, 975.0), 40.0, "Bold");
+        set(&mut tag, "align", ParamValue::Choice(1));
+        set(&mut tag, "fill_color", rgb(0xffffff));
+        set(&mut tag, "tracking", ParamValue::Float(60.0));
+        v.push(builtin(
+            "yt-thumbnail-bold",
+            "YouTuber – Kapak Başlığı",
+            "Titles",
+            "Kapak (thumbnail) için kalın, konturlu büyük başlık ve kanal şeridi.",
+            5,
+            vec![h, bar, tag],
+            vec![ctl("headline", "Başlık", 1, "text"), ctl("tag", "Kanal", 3, "text"), ctl("accent", "Şerit Rengi", 2, "fill_color")],
+        ));
+    }
     v
 }
 
@@ -713,6 +1278,29 @@ mod tests {
         assert_eq!(base64_encode(b"Man"), "TWFu");
         assert_eq!(base64_encode(b"Ma"), "TWE=");
         assert!(base64_decode("@@@").is_none());
+    }
+
+    #[test]
+    fn atlas_theme_recolours_accents_and_keeps_contrast() {
+        let mut tag = builtin_templates().into_iter().find(|t| t.id == "builtin:yt-timeline-tag").unwrap();
+        apply_theme(&mut tag, "atlas");
+        let col = |t: &GraphicsTemplate, name: &str, key: &str| {
+            t.layers
+                .iter()
+                .find(|e| matches!(e.params.get("name").map(|p| &p.value), Some(ParamValue::Text(n)) if n == name))
+                .and_then(|e| match e.params.get(key).map(|p| &p.value) {
+                    Some(ParamValue::Color(c)) => Some(*c),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let boxc = col(&tag, "Kutu", "fill_color");
+        assert!(boxc[0] > 0.9 && boxc[1] > 0.6 && boxc[2] < 0.3, "red box → amber: {boxc:?}");
+        let ink = col(&tag, "Tarih", "fill_color");
+        assert!(ink[0] < 0.1, "text on amber turns dark: {ink:?}");
+        let mut before = tag.clone();
+        apply_theme(&mut before, "nope");
+        assert_eq!(before, tag, "unknown theme is a no-op");
     }
 
     #[test]

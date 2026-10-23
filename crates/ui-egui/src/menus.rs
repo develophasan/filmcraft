@@ -26,6 +26,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("window.dockPanel", "Dock Panel", [], None),
     uic!("window.floatPanel", "Undock Panel", [], None),
     uic!("window.closePanel", "Close Panel", [], None),
+    uic!("app.language.turkish", "Türkçe", ["Edit", "Language"], None),
     uic!("app.language.english", "English", ["Edit", "Language"], None),
     uic!("app.language.japanese", "日本語", ["Edit", "Language"], None),
     uic!("app.language.spanish", "Español", ["Edit", "Language"], None),
@@ -136,14 +137,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("mode.import", "Import", [], None),
     uic!("mode.edit", "Edit", [], None),
     uic!("mode.export", "Export", ["File", "Export"], Some("Cmd+M")),
-    uic!("help.discord", "Join the ArtCraft Discord…", ["Help"], None),
-    uic!("help.website", "ArtCraft Website", ["Help"], None),
-    uic!("help.appPage", "FilmCraft on getartcraft.com", ["Help"], None),
-    uic!("help.github", "FilmCraft on GitHub", ["Help"], None),
+    uic!("help.github", "CrStudio on GitHub", ["Help"], None),
+    uic!("help.profile", "develophasan on GitHub", ["Help"], None),
     uic!("help.reportIssue", "Report an Issue…", ["Help"], None),
+    uic!("help.upstream", "Based on FilmCraft (upstream)", ["Help"], None),
     uic!("help.revealLogFiles", "Reveal Log Files…", ["Help"], None),
     uic!("help.systemCompatibilityReport", "System Compatibility Report…", ["Help"], None),
-    uic!("app.about", "About FilmCraft", ["Help"], None),
+    uic!("app.about", "About CrStudio", ["Help"], None),
     uic!("app.keyboardShortcuts", "Keyboard Shortcuts…", ["Edit"], Some("Cmd+Alt+K")),
     uic!("app.settings.general", "General…", ["Edit", "Preferences"], Some("Cmd+,")),
     uic!("app.settings.appearance", "Appearance…", ["Edit", "Preferences"], None),
@@ -188,6 +188,7 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
     if matches!(
         id,
         "app.language.english"
+            | "app.language.turkish"
             | "app.language.japanese"
             | "app.language.spanish"
             | "app.language.portuguese"
@@ -224,6 +225,7 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
             "app.language.indonesian" => crate::i18n::Language::Id,
             "app.language.italian" => crate::i18n::Language::It,
             "app.language.korean" => crate::i18n::Language::Ko,
+            "app.language.turkish" => crate::i18n::Language::Tr,
             _ => crate::i18n::Language::En,
         };
         // The preference is updated in memory before it is written, so a failed write (read-only
@@ -697,6 +699,7 @@ pub fn menu_items(app: &FilmcraftApp) -> Vec<MenuItem> {
             "app.language.indonesian" => it.checked = Some(app.ui.language == crate::i18n::Language::Id),
             "app.language.italian" => it.checked = Some(app.ui.language == crate::i18n::Language::It),
             "app.language.korean" => it.checked = Some(app.ui.language == crate::i18n::Language::Ko),
+            "app.language.turkish" => it.checked = Some(app.ui.language == crate::i18n::Language::Tr),
             _ => {}
         }
         if it.id.starts_with("view.") {

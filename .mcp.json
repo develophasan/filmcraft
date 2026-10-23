@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "crstudio": {
+      "command": "target/debug/filmcraft-cli",
+      "args": ["mcp", "--bridge", "127.0.0.1:9876"]
+    },
     "filmcraft": {
       "command": "target/release/filmcraft-cli",
       "args": ["mcp", "--bridge", "127.0.0.1:9876"]

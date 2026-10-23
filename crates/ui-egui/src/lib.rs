@@ -538,6 +538,12 @@ impl FilmcraftApp {
         let frames = Arc::new(FrameServer::new(session.media.clone(), session.services.clone(), session.previews.clone(), FrameServer::default_workers()));
         let workspaces =
             session.prefs_path.as_ref().and_then(|p| p.parent()).map(|d| dock::WorkspacePrefs::load(&d.join(dock::WORKSPACES_FILE))).unwrap_or_default();
+        // CrStudio defaults to Turkish; unit tests build apps from `Session::default()` and check
+        // English labels, so they start in English (tests that need another language set it).
+        #[cfg(test)]
+        if session.prefs.general.interface_language == "tr" {
+            session.prefs.general.interface_language = "en".into();
+        }
         let language = i18n::Language::parse(&session.prefs.general.interface_language).unwrap_or_default();
         Self {
             session,
@@ -990,13 +996,20 @@ impl FilmcraftApp {
     /// timeline playback first. Starting playback again takes the output back.
     pub fn play_tts_preview(&mut self) -> Result<f64, String> {
         let audio = self.session.tts_preview.clone().ok_or("nothing to preview")?;
+        self.play_mono(audio.samples.clone(), audio.sample_rate)
+    }
+
+    /// Play mono samples at `rate` on the audio output (a narration preview), stopping timeline
+    /// playback first. Returns the length in seconds; [`Self::stop`] ends it.
+    pub fn play_mono(&mut self, samples: Vec<f32>, rate: u32) -> Result<f64, String> {
+        let audio = filmcraft_engine::crstudio::wav::Mono { samples, rate };
         if self.playback.playing {
             self.stop();
         }
         let a = self.audio.as_mut().ok_or("no audio output (check Settings ▸ Audio Hardware)")?;
         let sr = a.sample_rate().max(1);
         a.stop();
-        let step = f64::from(audio.sample_rate.max(1)) / f64::from(sr);
+        let step = f64::from(audio.rate.max(1)) / f64::from(sr);
         let seconds = audio.seconds();
         let mut pos = 0.0f64;
         let fill = Box::new(move |buf: &mut [f32], ch: usize| {
@@ -1788,6 +1801,7 @@ impl FilmcraftApp {
         let status_h = if self.ui.show_status_bar { 20.0 } else { 0.0 };
         let body = egui::Rect::from_min_max(egui::pos2(full.min.x + 1.0, header.max.y + 1.0), egui::pos2(full.max.x - 1.0, full.max.y - status_h - 2.0));
         match self.ui.mode {
+            state::Mode::CrStudio => panels::crstudio::show(self, ui, body),
             state::Mode::Edit => self.dock_area(ui, body),
             state::Mode::Import => panels::import_mode::show(self, ui, body),
             state::Mode::Export => panels::export_mode::show(self, ui, body),
